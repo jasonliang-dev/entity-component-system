@@ -98,37 +98,34 @@ static void grow(ecs_map_t *map, float growth_factor)
 {
     uint32_t new_capacity = map->load_capacity * growth_factor;
     ecs_bucket_t *new_sparse = ecs_calloc(sizeof(ecs_bucket_t), new_capacity);
-    uint32_t *new_reverse_lookup = ecs_malloc(sizeof(uint32_t) * (new_capacity * LOAD_FACTOR + 1));
+    free(map->reverse_lookup);
+    map->reverse_lookup = ecs_malloc(sizeof(uint32_t) * (new_capacity * LOAD_FACTOR + 1));
     map->dense = ecs_realloc(map->dense, map->item_size * (new_capacity * LOAD_FACTOR + 1));
 
     for (uint32_t i = 0; i < map->load_capacity; i++)
     {
         ecs_bucket_t bucket = map->sparse[i];
 
-        if (bucket.index == 0 || bucket.index == TOMESTONE)
+        if (bucket.index != 0 && bucket.index != TOMESTONE)
         {
-            continue;
+            ecs_key_t hashed = hash(bucket.key);
+            ecs_bucket_t *other = &new_sparse[hashed % new_capacity];
+            uint32_t next = 0;
+
+            while (other->index != 0)
+            {
+                hashed += next_pow_of_2(next++);
+                other = &new_sparse[hashed % new_capacity];
+            }
+
+            other->key = bucket.key;
+            other->index = bucket.index;
+            map->reverse_lookup[bucket.index] = hashed % new_capacity;
         }
-
-        ecs_key_t hashed = hash(bucket.key);
-        ecs_bucket_t *other = &new_sparse[hashed % new_capacity];
-        uint32_t next = 0;
-
-        while (other->index != 0)
-        {
-            hashed += next_pow_of_2(next++);
-            other = &new_sparse[hashed % new_capacity];
-        }
-
-        other->key = bucket.key;
-        other->index = bucket.index;
-        new_reverse_lookup[bucket.index] = hashed % new_capacity;
     }
 
     free(map->sparse);
-    free(map->reverse_lookup);
     map->sparse = new_sparse;
-    map->reverse_lookup = new_reverse_lookup;
     map->load_capacity = new_capacity;
 }
 
@@ -141,7 +138,7 @@ void ecs_map_set(ecs_map_t *map, ecs_key_t key, const void *payload)
 
     while (bucket->index != 0)
     {
-        if (bucket->key == key)
+        if (bucket->key == key && bucket->index != TOMESTONE)
         {
             void *loc = (char *)map->dense + (map->item_size * bucket->index);
             memcpy(loc, payload, map->item_size);
