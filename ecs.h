@@ -6,29 +6,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ECS_NEW(type, count) ((type *)ecs_malloc((count) * sizeof(type)))
-
-static inline void *ecs_malloc(size_t bytes)
-{
-    void *mem = malloc(bytes);
-    assert(mem != NULL);
-    return mem;
-}
-
-static inline void *ecs_calloc(size_t items, size_t bytes)
-{
-    void *mem = calloc(items, bytes);
-    assert(mem != NULL);
-    return mem;
-}
-
-static inline void *ecs_realloc(void *mem, size_t bytes)
-{
-    void *new_mem = realloc(mem, bytes);
-    assert(new_mem != NULL);
-    return new_mem;
-}
-
 typedef uint32_t ecs_key_t;
 
 typedef struct ecs_bucket_t
@@ -42,8 +19,9 @@ typedef struct ecs_map_t
     size_t item_size;
     uint32_t count;
     uint32_t load_capacity;
-    void *dense;
     ecs_bucket_t *sparse;
+    uint32_t *reverse_lookup;
+    void *dense;
 } ecs_map_t;
 
 ecs_map_t *ecs_map_new(size_t size, uint32_t count);
@@ -80,6 +58,7 @@ struct ecs_archetype_t
 
 typedef struct ecs_world_t
 {
+    ecs_map_t *entity_index;
     ecs_archetype_t *root;
 } ecs_world_t;
 
