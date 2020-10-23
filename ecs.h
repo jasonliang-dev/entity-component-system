@@ -12,11 +12,13 @@ extern "C"
 {
 #endif
 
+#define ECS_PTR_CAST(x) ((void *)(uintptr_t)(x))
+
     typedef struct ecs_bucket_t ecs_bucket_t;
 
     typedef struct ecs_map_t ecs_map_t;
 
-    typedef uint32_t (*ecs_hash_fn)(const struct ecs_map_t *, const void *);
+    typedef uint32_t (*ecs_hash_fn)(const void *);
     typedef bool (*ecs_key_equal_fn)(const void *, const void *);
 
     struct ecs_map_t
@@ -38,14 +40,15 @@ extern "C"
     void *ecs_map_get(const ecs_map_t *map, const void *key);
     void ecs_map_set(ecs_map_t *map, const void *key, const void *payload);
     void ecs_map_remove(ecs_map_t *map, const void *key);
-    void ecs_map_inspect(ecs_map_t *map);
-    uint32_t ecs_hash_int(const ecs_map_t *map, const void *key);
-    uint32_t ecs_hash_string(const ecs_map_t *map, const void *key);
-    uint32_t ecs_hash_direct(const ecs_map_t *map, const void *key);
+    void ecs_map_inspect(ecs_map_t *map); // assumes keys and values are ints
+    uint32_t ecs_hash_intptr(const void *key);
+    uint32_t ecs_hash_string(const void *key);
+    uint32_t ecs_hash_direct(const void *key);
+    bool ecs_equal_intptr(const void *a, const void *b);
     bool ecs_equal_string(const void *a, const void *b);
     bool ecs_equal_direct(const void *a, const void *b);
 
-#define ECS_MAP(k, v, fn, capacity) ecs_map_new(sizeof(k), sizeof(v), ecs_hash_##fn, ecs_equal_##fn, capacity)
+#define ECS_MAP(fn, k, v, capacity) ecs_map_new(sizeof(k), sizeof(v), ecs_hash_##fn, ecs_equal_##fn, capacity)
 
     typedef uint64_t ecs_entity_t;
 

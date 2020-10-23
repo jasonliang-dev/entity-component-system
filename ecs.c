@@ -4,11 +4,10 @@
 #include <string.h>
 
 #define LOAD_FACTOR 0.5
+#define COLLISION_THRESHOLD 30
 #define TOMESTONE ((uint32_t)-1)
 
 #define ECS_OFFSET(p, offset) ((void *)(((char *)(p)) + (offset)))
-
-#define ECS_NEW(T, count) ((T *)ecs_malloc((count) * sizeof(T)))
 
 static inline void *ecs_malloc(size_t bytes)
 {
@@ -37,19 +36,17 @@ struct ecs_bucket_t
     uint32_t index;
 };
 
-uint32_t ecs_hash_int(const ecs_map_t *map, const void *key)
+uint32_t ecs_hash_intptr(const void *key)
 {
-    (void)map;
-    uint32_t hashed = *(uint32_t *)key;
+    uintptr_t hashed = (uintptr_t)key;
     hashed = ((hashed >> 16) ^ hashed) * 0x45d9f3b;
     hashed = ((hashed >> 16) ^ hashed) * 0x45d9f3b;
     hashed = (hashed >> 16) ^ hashed;
     return hashed;
 }
 
-uint32_t ecs_hash_string(const ecs_map_t *map, const void *key)
+uint32_t ecs_hash_string(const void *key)
 {
-    (void)map;
     char *str = (char *)key;
     unsigned long hash = 5381;
     char c;
@@ -62,10 +59,14 @@ uint32_t ecs_hash_string(const ecs_map_t *map, const void *key)
     return hash;
 }
 
-uint32_t ecs_hash_direct(const ecs_map_t *map, const void *key)
+uint32_t ecs_hash_direct(const void *key)
 {
-    const uintptr_t shift = log2(1 + sizeof(map->key_size));
-    return (uintptr_t)key >> shift;
+    return (uintptr_t)key;
+}
+
+bool ecs_equal_intptr(const void *a, const void *b)
+{
+    return a == b;
 }
 
 bool ecs_equal_string(const void *a, const void *b)
@@ -117,9 +118,9 @@ static inline uint32_t next_pow_of_2(uint32_t n)
 
 void *ecs_map_get(const ecs_map_t *map, const void *key)
 {
-    uint32_t i = map->hash(map, key);
+    uint32_t i = map->hash(key);
     ecs_bucket_t bucket = map->sparse[i % map->load_capacity];
-    uint32_t next = 0;
+    uint32_t collisions = 0;
 
     while (bucket.index != 0)
     {
@@ -128,7 +129,7 @@ void *ecs_map_get(const ecs_map_t *map, const void *key)
             break;
         }
 
-        i += next_pow_of_2(next++);
+        i += next_pow_of_2(collisions++);
         bucket = map->sparse[i % map->load_capacity];
     }
 
@@ -154,13 +155,13 @@ static void grow(ecs_map_t *map, float growth_factor)
 
         if (bucket.index != 0 && bucket.index != TOMESTONE)
         {
-            uint32_t hashed = map->hash(map, bucket.key);
+            uint32_t hashed = map->hash(bucket.key);
             ecs_bucket_t *other = &new_sparse[hashed % new_capacity];
-            uint32_t next = 0;
+            uint32_t collisions = 0;
 
             while (other->index != 0)
             {
-                hashed += next_pow_of_2(next++);
+                hashed += next_pow_of_2(collisions++);
                 other = &new_sparse[hashed % new_capacity];
             }
 
@@ -177,9 +178,9 @@ static void grow(ecs_map_t *map, float growth_factor)
 
 void ecs_map_set(ecs_map_t *map, const void *key, const void *payload)
 {
-    uint32_t i = map->hash(map, key);
+    uint32_t i = map->hash(key);
     ecs_bucket_t *bucket = &map->sparse[i % map->load_capacity];
-    uint32_t next = 0;
+    uint32_t collisions = 0;
     ecs_bucket_t *first_tomestone = NULL;
 
     while (bucket->index != 0)
@@ -196,7 +197,13 @@ void ecs_map_set(ecs_map_t *map, const void *key, const void *payload)
             first_tomestone = bucket;
         }
 
-        i += next_pow_of_2(next++);
+        if (collisions > COLLISION_THRESHOLD)
+        {
+            fprintf(stderr, "Too many collisions\n");
+            exit(1);
+        }
+
+        i += next_pow_of_2(collisions++);
         bucket = &map->sparse[i % map->load_capacity];
     }
 
@@ -220,7 +227,7 @@ void ecs_map_set(ecs_map_t *map, const void *key, const void *payload)
 
 void ecs_map_remove(ecs_map_t *map, const void *key)
 {
-    uint32_t i = map->hash(map, key);
+    uint32_t i = map->hash(key);
     ecs_bucket_t bucket = map->sparse[i % map->load_capacity];
     uint32_t next = 0;
 
@@ -265,21 +272,13 @@ void ecs_map_inspect(ecs_map_t *map)
            "  load_capacity: %d\n",
            map->item_size, map->count, map->load_capacity);
 
-    /*
     printf("  sparse: [\n");
     for (uint32_t i = 0; i < map->load_capacity; i++)
     {
         ecs_bucket_t bucket = map->sparse[i];
-        printf("    %d: { key: %d, index: %d }\n", i, bucket.key, bucket.index);
-        printf("    %d: { key: ", i);
-        if (map->hash_func == hash_int)
-        {
-            printf("%d", *(uint32_t *)bucket.key);
-        }
-        printf("    %d: { key: %d, index: %d }\n", i, bucket.key, bucket.index);
+        printf("    %d: { key: %lu, index: %d }\n", i, (uintptr_t)bucket.key, bucket.index);
     }
     printf("  ]\n");
-    */
 
     printf("  dense: [\n");
     for (uint32_t i = 0; i < map->load_capacity * LOAD_FACTOR + 1; i++)
