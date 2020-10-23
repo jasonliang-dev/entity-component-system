@@ -4,29 +4,60 @@
 #include <stdio.h>
 #include <string.h>
 
-#define LOAD_FACTOR 0.5
-#define COLLISION_THRESHOLD 30
-#define TOMESTONE ((uint32_t)-1)
-
 #define ECS_OFFSET(p, offset) ((void *)(((char *)(p)) + (offset)))
+
+#define OUT_OF_MEMORY 1
+#define TOO_MANY_COLLISIONS 2
+
+static const char *ecs_error_to_str(uint32_t error) {
+  switch (error) {
+  case OUT_OF_MEMORY:
+    return "out of memory";
+  case TOO_MANY_COLLISIONS:
+    return "too many hash collisions";
+  }
+
+  return "unknown error";
+}
+
+#define ECS_ABORT(error)                                                       \
+  fprintf(stderr, "ABORT %s:%d %s\n", __FILE__, __LINE__,                      \
+          ecs_error_to_str(error));                                            \
+  abort();
+
+#define ECS_ENSURE(cond, error)                                                \
+  if (!(cond)) {                                                               \
+    fprintf(stderr, "condition not met: %s\n", #cond);                         \
+    ECS_ABORT(error);                                                          \
+  }
+
+#ifndef NDEBUG
+#define ECS_ASSERT(cond, error) ECS_ENSURE(cond, error);
+#else
+#define ECS_ASSERT(cond, error)
+#endif
 
 static inline void *ecs_malloc(size_t bytes) {
   void *mem = malloc(bytes);
-  assert(mem != NULL);
+  ECS_ENSURE(mem != NULL, OUT_OF_MEMORY);
   return mem;
 }
 
 static inline void *ecs_calloc(size_t items, size_t bytes) {
   void *mem = calloc(items, bytes);
-  assert(mem != NULL);
+  ECS_ENSURE(mem != NULL, OUT_OF_MEMORY);
   return mem;
 }
 
 static inline void *ecs_realloc(void *mem, size_t bytes) {
   mem = realloc(mem, bytes);
-  assert(mem != NULL);
+  ECS_ENSURE(mem != NULL, OUT_OF_MEMORY);
   return mem;
 }
+
+#define LOAD_FACTOR 0.5
+#define COLLISION_THRESHOLD 30
+#define TOMESTONE ((uint32_t)-1)
 
 struct ecs_bucket_t {
   const void *key;
@@ -165,12 +196,8 @@ void ecs_map_set(ecs_map_t *map, const void *key, const void *payload) {
       first_tomestone = bucket;
     }
 
-    if (collisions > COLLISION_THRESHOLD) {
-      fprintf(stderr, "Too many collisions\n");
-      exit(1);
-    }
-
     i += next_pow_of_2(collisions++);
+    ECS_ASSERT(collisions < COLLISION_THRESHOLD, TOO_MANY_COLLISIONS);
     bucket = &map->sparse[i % map->load_capacity];
   }
 
@@ -225,6 +252,7 @@ void ecs_map_remove(ecs_map_t *map, const void *key) {
   map->count--;
 }
 
+#ifndef NDEBUG
 void ecs_map_inspect(ecs_map_t *map) {
   printf("\nmap: {\n"
          "  item_size: %ld bytes\n"
@@ -263,6 +291,7 @@ void ecs_map_inspect(ecs_map_t *map) {
 
   printf("}\n");
 }
+#endif // NDEBUG
 
 ecs_registry_t *ecs_init() {
   ecs_registry_t *registry = ecs_malloc(sizeof(ecs_registry_t));

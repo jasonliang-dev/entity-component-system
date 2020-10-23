@@ -11,8 +11,6 @@
 extern "C" {
 #endif
 
-#define ECS_PTR_CAST(x) ((void *)(uintptr_t)(x))
-
 typedef struct ecs_bucket_t ecs_bucket_t;
 
 typedef struct ecs_map_t ecs_map_t;
@@ -38,11 +36,14 @@ void ecs_map_free(ecs_map_t *map);
 void *ecs_map_get(const ecs_map_t *map, const void *key);
 void ecs_map_set(ecs_map_t *map, const void *key, const void *payload);
 void ecs_map_remove(ecs_map_t *map, const void *key);
-void ecs_map_inspect(ecs_map_t *map); // assumes keys and values are ints
 uint32_t ecs_hash_intptr(const void *key);
 uint32_t ecs_hash_string(const void *key);
 bool ecs_equal_intptr(const void *a, const void *b);
 bool ecs_equal_string(const void *a, const void *b);
+
+#ifndef NDEBUG
+void ecs_map_inspect(ecs_map_t *map); // assumes keys and values are ints
+#endif
 
 #define ECS_MAP(fn, k, v, capacity)                                            \
   ecs_map_new(sizeof(k), sizeof(v), ecs_hash_##fn, ecs_equal_##fn, capacity)
