@@ -8,93 +8,89 @@
 #include <stdlib.h>
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
 #define ECS_PTR_CAST(x) ((void *)(uintptr_t)(x))
 
-    typedef struct ecs_bucket_t ecs_bucket_t;
+typedef struct ecs_bucket_t ecs_bucket_t;
 
-    typedef struct ecs_map_t ecs_map_t;
+typedef struct ecs_map_t ecs_map_t;
 
-    typedef uint32_t (*ecs_hash_fn)(const void *);
-    typedef bool (*ecs_key_equal_fn)(const void *, const void *);
+typedef uint32_t (*ecs_hash_fn)(const void *);
+typedef bool (*ecs_key_equal_fn)(const void *, const void *);
 
-    struct ecs_map_t
-    {
-        ecs_hash_fn hash;
-        ecs_key_equal_fn key_equal;
-        size_t key_size;
-        size_t item_size;
-        uint32_t count;
-        uint32_t load_capacity;
-        ecs_bucket_t *sparse;
-        uint32_t *reverse_lookup;
-        void *dense;
-    };
+struct ecs_map_t {
+  ecs_hash_fn hash;
+  ecs_key_equal_fn key_equal;
+  size_t key_size;
+  size_t item_size;
+  uint32_t count;
+  uint32_t load_capacity;
+  ecs_bucket_t *sparse;
+  uint32_t *reverse_lookup;
+  void *dense;
+};
 
-    ecs_map_t *ecs_map_new(size_t key_size, size_t item_size, ecs_hash_fn hash_fn, ecs_key_equal_fn key_equal_fn,
-                           uint32_t capacity);
-    void ecs_map_free(ecs_map_t *map);
-    void *ecs_map_get(const ecs_map_t *map, const void *key);
-    void ecs_map_set(ecs_map_t *map, const void *key, const void *payload);
-    void ecs_map_remove(ecs_map_t *map, const void *key);
-    void ecs_map_inspect(ecs_map_t *map); // assumes keys and values are ints
-    uint32_t ecs_hash_intptr(const void *key);
-    uint32_t ecs_hash_string(const void *key);
-    uint32_t ecs_hash_direct(const void *key);
-    bool ecs_equal_intptr(const void *a, const void *b);
-    bool ecs_equal_string(const void *a, const void *b);
-    bool ecs_equal_direct(const void *a, const void *b);
+ecs_map_t *ecs_map_new(size_t key_size, size_t item_size, ecs_hash_fn hash_fn,
+                       ecs_key_equal_fn key_equal_fn, uint32_t capacity);
+void ecs_map_free(ecs_map_t *map);
+void *ecs_map_get(const ecs_map_t *map, const void *key);
+void ecs_map_set(ecs_map_t *map, const void *key, const void *payload);
+void ecs_map_remove(ecs_map_t *map, const void *key);
+void ecs_map_inspect(ecs_map_t *map); // assumes keys and values are ints
+uint32_t ecs_hash_intptr(const void *key);
+uint32_t ecs_hash_string(const void *key);
+bool ecs_equal_intptr(const void *a, const void *b);
+bool ecs_equal_string(const void *a, const void *b);
 
-#define ECS_MAP(fn, k, v, capacity) ecs_map_new(sizeof(k), sizeof(v), ecs_hash_##fn, ecs_equal_##fn, capacity)
+#define ECS_MAP(fn, k, v, capacity)                                            \
+  ecs_map_new(sizeof(k), sizeof(v), ecs_hash_##fn, ecs_equal_##fn, capacity)
 
-    typedef uint64_t ecs_entity_t;
+typedef uint64_t ecs_entity_t;
 
-    typedef struct ecs_component_array_t
-    {
-        void *elements;
-        size_t size;
-    } ecs_component_array_t;
+typedef struct ecs_component_array_t {
+  void *elements;
+  size_t size;
+} ecs_component_array_t;
 
-    typedef struct ecs_archetype_t ecs_archetype_t;
+typedef struct ecs_archetype_t ecs_archetype_t;
 
-    typedef struct ecs_edge_t
-    {
-        ecs_entity_t component;
-        ecs_archetype_t *add;
-        ecs_archetype_t *remove;
-    } ecs_edge_t;
+typedef struct ecs_edge_t {
+  ecs_entity_t component;
+  ecs_archetype_t *add;
+  ecs_archetype_t *remove;
+} ecs_edge_t;
 
-    struct ecs_archetype_t
-    {
-        uint32_t length;
-        ecs_entity_t *type;
-        ecs_entity_t *entity_ids;
-        ecs_component_array_t *components;
-    };
+struct ecs_archetype_t {
+  uint32_t length;
+  ecs_entity_t *type;
+  ecs_entity_t *entity_ids;
+  ecs_component_array_t *components;
+};
 
-    typedef struct ecs_record_t
-    {
-        ecs_archetype_t *archetype;
-        uint32_t row;
-    } ecs_record_t;
+typedef struct ecs_record_t {
+  ecs_archetype_t *archetype;
+  uint32_t row;
+} ecs_record_t;
 
-    typedef struct ecs_registry_t
-    {
-        ecs_map_t *entity_index;
-        ecs_archetype_t *root;
-    } ecs_registry_t;
+typedef struct ecs_registry_t {
+  ecs_map_t *entity_index;
+  ecs_archetype_t *root;
+} ecs_registry_t;
 
-    ecs_registry_t *ecs_init(void);
-    void ecs_destroy(ecs_registry_t *registry);
-    ecs_entity_t ecs_entity(ecs_registry_t *registry, const char *types_str);
-    ecs_entity_t ecs_component(ecs_registry_t *registry, size_t component_size);
-    void ecs_system(ecs_registry_t *registry, void (*func)(), const char *types_str);
-    void ecs_add(ecs_registry_t *registry, ecs_entity_t entity, ecs_entity_t component);
-    void ecs_set(ecs_registry_t *registry, ecs_entity_t entity, ecs_entity_t component, void *payload);
-    void ecs_remove(ecs_registry_t *registry, ecs_entity_t entity, ecs_entity_t component);
+ecs_registry_t *ecs_init(void);
+void ecs_destroy(ecs_registry_t *registry);
+ecs_entity_t ecs_entity(ecs_registry_t *registry, const char *types_str);
+ecs_entity_t ecs_component(ecs_registry_t *registry, size_t component_size);
+void ecs_system(ecs_registry_t *registry, void (*func)(),
+                const char *types_str);
+void ecs_add(ecs_registry_t *registry, ecs_entity_t entity,
+             ecs_entity_t component);
+void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
+             ecs_entity_t component, void *payload);
+void ecs_remove(ecs_registry_t *registry, ecs_entity_t entity,
+                ecs_entity_t component);
 
 #ifdef __cplusplus
 } // extern "C"
