@@ -1,11 +1,14 @@
 #include "ecs.h"
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 #define LOAD_FACTOR 0.5
 #define TOMESTONE ((uint32_t)-1)
 
-#define ECS_NEW(type, count) ((type *)ecs_malloc((count) * sizeof(type)))
+#define ECS_OFFSET(p, offset) ((void *)(((char *)(p)) + (offset)))
+
+#define ECS_NEW(T, count) ((T *)ecs_malloc((count) * sizeof(T)))
 
 static inline void *ecs_malloc(size_t bytes)
 {
@@ -28,26 +31,64 @@ static inline void *ecs_realloc(void *mem, size_t bytes)
     return mem;
 }
 
-static inline uint32_t next_pow_of_2(uint32_t n)
+struct ecs_bucket_t
 {
-    n--;
-    n |= n >> 1;
-    n |= n >> 2;
-    n |= n >> 4;
-    n |= n >> 8;
-    n |= n >> 16;
-    n++;
+    const void *key;
+    uint32_t index;
+};
 
-    return n;
+uint32_t ecs_hash_int(const ecs_map_t *map, const void *key)
+{
+    (void)map;
+    uint32_t hashed = *(uint32_t *)key;
+    hashed = ((hashed >> 16) ^ hashed) * 0x45d9f3b;
+    hashed = ((hashed >> 16) ^ hashed) * 0x45d9f3b;
+    hashed = (hashed >> 16) ^ hashed;
+    return hashed;
 }
 
-ecs_map_t *ecs_map_new(size_t size, uint32_t capacity)
+uint32_t ecs_hash_string(const ecs_map_t *map, const void *key)
 {
-    ecs_map_t *map = ECS_NEW(ecs_map_t, 1);
+    (void)map;
+    char *str = (char *)key;
+    unsigned long hash = 5381;
+    char c;
+
+    while ((c = *str++))
+    {
+        hash = ((hash << 5) + hash) + c;
+    }
+
+    return hash;
+}
+
+uint32_t ecs_hash_direct(const ecs_map_t *map, const void *key)
+{
+    const uintptr_t shift = log2(1 + sizeof(map->key_size));
+    return (uintptr_t)key >> shift;
+}
+
+bool ecs_equal_string(const void *a, const void *b)
+{
+    return strcmp(a, b) == 0;
+}
+
+bool ecs_equal_direct(const void *a, const void *b)
+{
+    return a == b;
+}
+
+ecs_map_t *ecs_map_new(size_t key_size, size_t item_size, ecs_hash_fn hash_fn, ecs_key_equal_fn key_equal_fn,
+                       uint32_t capacity)
+{
+    ecs_map_t *map = ecs_malloc(sizeof(ecs_map_t));
+    map->hash = hash_fn;
+    map->key_equal = key_equal_fn;
     map->sparse = ecs_calloc(sizeof(ecs_bucket_t), capacity);
     map->reverse_lookup = ecs_malloc(sizeof(uint32_t) * (capacity * LOAD_FACTOR + 1));
-    map->dense = ecs_malloc(size * (capacity * LOAD_FACTOR + 1));
-    map->item_size = size;
+    map->dense = ecs_malloc(item_size * (capacity * LOAD_FACTOR + 1));
+    map->key_size = key_size;
+    map->item_size = item_size;
     map->load_capacity = capacity;
     map->count = 0;
     return map;
@@ -61,23 +102,28 @@ void ecs_map_free(ecs_map_t *map)
     free(map);
 }
 
-static ecs_key_t hash(ecs_key_t key)
+static inline uint32_t next_pow_of_2(uint32_t n)
 {
-    key = ((key >> 16) ^ key) * 0x45d9f3b;
-    key = ((key >> 16) ^ key) * 0x45d9f3b;
-    key = (key >> 16) ^ key;
-    return key;
+    n--;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n++;
+
+    return n;
 }
 
-void *ecs_map_get(const ecs_map_t *map, ecs_key_t key)
+void *ecs_map_get(const ecs_map_t *map, const void *key)
 {
-    ecs_key_t i = hash(key);
+    uint32_t i = map->hash(map, key);
     ecs_bucket_t bucket = map->sparse[i % map->load_capacity];
     uint32_t next = 0;
 
     while (bucket.index != 0)
     {
-        if (bucket.key == key && bucket.index != TOMESTONE)
+        if (map->key_equal(bucket.key, key) && bucket.index != TOMESTONE)
         {
             break;
         }
@@ -91,7 +137,7 @@ void *ecs_map_get(const ecs_map_t *map, ecs_key_t key)
         return NULL;
     }
 
-    return (char *)map->dense + (map->item_size * bucket.index);
+    return ECS_OFFSET(map->dense, map->item_size * bucket.index);
 }
 
 static void grow(ecs_map_t *map, float growth_factor)
@@ -108,7 +154,7 @@ static void grow(ecs_map_t *map, float growth_factor)
 
         if (bucket.index != 0 && bucket.index != TOMESTONE)
         {
-            ecs_key_t hashed = hash(bucket.key);
+            uint32_t hashed = map->hash(map, bucket.key);
             ecs_bucket_t *other = &new_sparse[hashed % new_capacity];
             uint32_t next = 0;
 
@@ -129,18 +175,18 @@ static void grow(ecs_map_t *map, float growth_factor)
     map->load_capacity = new_capacity;
 }
 
-void ecs_map_set(ecs_map_t *map, ecs_key_t key, const void *payload)
+void ecs_map_set(ecs_map_t *map, const void *key, const void *payload)
 {
-    ecs_key_t i = hash(key);
+    uint32_t i = map->hash(map, key);
     ecs_bucket_t *bucket = &map->sparse[i % map->load_capacity];
     uint32_t next = 0;
     ecs_bucket_t *first_tomestone = NULL;
 
     while (bucket->index != 0)
     {
-        if (bucket->key == key && bucket->index != TOMESTONE)
+        if (map->key_equal(bucket->key, key) && bucket->index != TOMESTONE)
         {
-            void *loc = (char *)map->dense + (map->item_size * bucket->index);
+            void *loc = ECS_OFFSET(map->dense, map->item_size * bucket->index);
             memcpy(loc, payload, map->item_size);
             return;
         }
@@ -161,7 +207,7 @@ void ecs_map_set(ecs_map_t *map, ecs_key_t key, const void *payload)
 
     bucket->key = key;
     bucket->index = map->count + 1;
-    void *loc = (char *)map->dense + (map->item_size * bucket->index);
+    void *loc = ECS_OFFSET(map->dense, map->item_size * bucket->index);
     memcpy(loc, payload, map->item_size);
     map->reverse_lookup[bucket->index] = i % map->load_capacity;
     map->count++;
@@ -172,15 +218,15 @@ void ecs_map_set(ecs_map_t *map, ecs_key_t key, const void *payload)
     }
 }
 
-void ecs_map_remove(ecs_map_t *map, ecs_key_t key)
+void ecs_map_remove(ecs_map_t *map, const void *key)
 {
-    ecs_key_t i = hash(key);
+    uint32_t i = map->hash(map, key);
     ecs_bucket_t bucket = map->sparse[i % map->load_capacity];
     uint32_t next = 0;
 
     while (bucket.index != 0)
     {
-        if (bucket.key == key && bucket.index != TOMESTONE)
+        if (map->key_equal(bucket.key, key) && bucket.index != TOMESTONE)
         {
             break;
         }
@@ -195,8 +241,8 @@ void ecs_map_remove(ecs_map_t *map, ecs_key_t key)
     }
 
     void *tmp = alloca(map->item_size);
-    void *left = (char *)map->dense + (map->item_size * bucket.index);
-    void *right = (char *)map->dense + (map->item_size * map->count);
+    void *left = ECS_OFFSET(map->dense, map->item_size * bucket.index);
+    void *right = ECS_OFFSET(map->dense, map->item_size * map->count);
     memcpy(tmp, left, map->item_size);
     memcpy(left, right, map->item_size);
     memcpy(right, tmp, map->item_size);
@@ -219,13 +265,21 @@ void ecs_map_inspect(ecs_map_t *map)
            "  load_capacity: %d\n",
            map->item_size, map->count, map->load_capacity);
 
+    /*
     printf("  sparse: [\n");
     for (uint32_t i = 0; i < map->load_capacity; i++)
     {
         ecs_bucket_t bucket = map->sparse[i];
         printf("    %d: { key: %d, index: %d }\n", i, bucket.key, bucket.index);
+        printf("    %d: { key: ", i);
+        if (map->hash_func == hash_int)
+        {
+            printf("%d", *(uint32_t *)bucket.key);
+        }
+        printf("    %d: { key: %d, index: %d }\n", i, bucket.key, bucket.index);
     }
     printf("  ]\n");
+    */
 
     printf("  dense: [\n");
     for (uint32_t i = 0; i < map->load_capacity * LOAD_FACTOR + 1; i++)
@@ -235,7 +289,7 @@ void ecs_map_inspect(ecs_map_t *map)
             printf("    -- end of load --\n");
         }
 
-        int item = *(int *)((char *)map->dense + (map->item_size * i));
+        int item = *(int *)ECS_OFFSET(map->dense, map->item_size * i);
         printf("    %d: %d\n", i, item);
     }
     printf("  ]\n");
@@ -255,13 +309,16 @@ void ecs_map_inspect(ecs_map_t *map)
     printf("}\n");
 }
 
-ecs_world_t *ecs_init()
+ecs_registry_t *ecs_init()
 {
-    ecs_world_t *world = ECS_NEW(ecs_world_t, 1);
-    return world;
+    ecs_registry_t *registry = ecs_malloc(sizeof(ecs_registry_t));
+    registry->entity_index =
+        ecs_map_new(sizeof(ecs_entity_t), sizeof(ecs_record_t), ecs_hash_direct, ecs_equal_direct, 64);
+    return registry;
 }
 
-void ecs_destroy(ecs_world_t *world)
+void ecs_destroy(ecs_registry_t *registry)
 {
-    free(world);
+    ecs_map_free(registry->entity_index);
+    free(registry);
 }
