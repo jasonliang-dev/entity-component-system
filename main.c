@@ -158,6 +158,154 @@ SUITE(map) {
   RUN_TEST(map_string_keys_struct_values);
 }
 
+TEST type_empty() {
+  ecs_type_t *type = ecs_type_new(8);
+  ecs_type_free(type);
+  PASS();
+}
+
+TEST type_contains() {
+  ecs_type_t *type = ecs_type_new(8);
+  ASSERT_EQ(ecs_type_contains(type, 1), false);
+  ecs_type_free(type);
+  PASS();
+}
+
+TEST type_add_1() {
+  ecs_type_t *type = ecs_type_new(8);
+  ecs_type_add(type, 1);
+  ASSERT_EQ(ecs_type_contains(type, 1), true);
+  ecs_type_free(type);
+  PASS();
+}
+
+TEST type_add_multiple(ecs_entity_t count) {
+  ecs_type_t *type = ecs_type_new(16);
+  for (ecs_entity_t i = 0; i < count; i++) {
+    ecs_type_add(type, i + 1);
+  }
+
+  for (ecs_entity_t i = 0; i < count; i++) {
+    ASSERT_EQ(ecs_type_contains(type, i + 1), true);
+  }
+  ASSERT_EQ(ecs_type_contains(type, 0), false);
+  ecs_type_free(type);
+  PASS();
+}
+
+TEST type_add_multiple_reversed(ecs_entity_t count) {
+  ecs_type_t *type = ecs_type_new(16);
+  for (ecs_entity_t i = 0; i < count; i++) {
+    ecs_type_add(type, count - i);
+  }
+
+  for (ecs_entity_t i = 0; i < count; i++) {
+    ASSERT_EQ(ecs_type_contains(type, count - i), true);
+  }
+  ASSERT_EQ(ecs_type_contains(type, 0), false);
+  ecs_type_free(type);
+  PASS();
+}
+
+TEST type_add_multiple_random(ecs_entity_t max) {
+  ecs_type_t *type = ecs_type_new(16);
+  ecs_entity_t ran = rand() % max;
+  for (ecs_entity_t i = 0; i < ran; i++) {
+    ecs_type_add(type, rand());
+  }
+
+  ecs_type_free(type);
+  PASS();
+}
+
+TEST type_add_duplicate() {
+  ecs_type_t *type = ecs_type_new(8);
+  ecs_type_add(type, 1);
+  ecs_type_add(type, 1);
+  ASSERT_EQ(ecs_type_contains(type, 1), true);
+  ecs_type_free(type);
+  PASS();
+}
+
+TEST type_remove_from_empty() {
+  ecs_type_t *type = ecs_type_new(8);
+  ecs_type_remove(type, 1);
+  ASSERT_EQ(ecs_type_contains(type, 1), false);
+  ecs_type_free(type);
+  PASS();
+}
+
+TEST type_remove_from_1() {
+  ecs_type_t *type = ecs_type_new(8);
+  ecs_type_add(type, 1);
+  ecs_type_remove(type, 1);
+  ASSERT_EQ(ecs_type_contains(type, 1), false);
+  ecs_type_free(type);
+  PASS();
+}
+
+TEST type_remove_from_many() {
+  ecs_type_t *type = ecs_type_new(8);
+  ecs_type_add(type, 3);
+  ecs_type_add(type, 2);
+  ecs_type_add(type, 5);
+  ecs_type_remove(type, 2);
+  ecs_type_add(type, 1);
+  ASSERT_EQ(ecs_type_contains(type, 2), false);
+  ASSERT_EQ(ecs_type_contains(type, 3), true);
+  ASSERT_EQ(ecs_type_contains(type, 5), true);
+  ecs_type_free(type);
+  PASS();
+}
+
+TEST type_equal() {
+  ecs_type_t *a = ecs_type_new(8);
+  ecs_type_add(a, 1);
+  ecs_type_add(a, 2);
+  ecs_type_add(a, 3);
+  ecs_type_t *b = ecs_type_new(8);
+  ecs_type_add(b, 3);
+  ecs_type_add(b, 1);
+  ecs_type_add(b, 2);
+  ASSERT(ecs_type_equal(a, a));
+  ASSERT(ecs_type_equal(b, b));
+  ASSERT(ecs_type_equal(a, b));
+  ecs_type_free(a);
+  ecs_type_free(b);
+  PASS();
+}
+
+TEST type_copy() {
+  ecs_type_t *a = ecs_type_new(8);
+  ecs_type_add(a, 1);
+  ecs_type_add(a, 2);
+  ecs_type_add(a, 3);
+  ecs_type_t *b = ecs_type_copy(a);
+  ASSERT(ecs_type_equal(a, b));
+  ecs_type_remove(b, 1);
+  ASSERT_FALSE(ecs_type_equal(a, b));
+  ecs_type_free(a);
+  ecs_type_free(b);
+  PASS();
+}
+
+SUITE(type) {
+  RUN_TEST(type_empty);
+  RUN_TEST(type_contains);
+  RUN_TEST(type_add_1);
+  for (int i = 10; i <= 1000; i *= 10) {
+    RUN_TEST1(type_add_multiple, i);
+    RUN_TEST1(type_add_multiple_reversed, i);
+    RUN_TEST1(type_add_multiple_random, i);
+  }
+  RUN_TEST(type_add_duplicate);
+  RUN_TEST(type_remove_from_empty);
+  RUN_TEST(type_remove_from_1);
+  RUN_TEST(type_remove_from_many);
+  RUN_TEST(type_equal);
+  RUN_TEST(type_copy);
+}
+
 TEST ecs_minimal() {
   ecs_registry_t *registry = ecs_init();
   ecs_destroy(registry);
@@ -169,8 +317,11 @@ SUITE(ecs) { RUN_TEST(ecs_minimal); }
 GREATEST_MAIN_DEFS();
 
 int main(int argc, char *argv[]) {
+  srand(time(NULL));
+
   GREATEST_MAIN_BEGIN();
   RUN_SUITE(map);
+  RUN_SUITE(type);
   RUN_SUITE(ecs);
   GREATEST_MAIN_END();
 }
