@@ -166,7 +166,7 @@ TEST type_empty() {
 
 TEST type_contains() {
   ecs_type_t *type = ecs_type_new(8);
-  ASSERT_EQ(ecs_type_contains(type, 1), false);
+  ASSERT_EQ(ecs_type_index_of(type, 1), -1);
   ecs_type_free(type);
   PASS();
 }
@@ -174,7 +174,7 @@ TEST type_contains() {
 TEST type_add_1() {
   ecs_type_t *type = ecs_type_new(8);
   ecs_type_add(type, 1);
-  ASSERT_EQ(ecs_type_contains(type, 1), true);
+  ASSERT_EQ(ecs_type_index_of(type, 1), 0);
   ecs_type_free(type);
   PASS();
 }
@@ -186,9 +186,9 @@ TEST type_add_multiple(ecs_entity_t count) {
   }
 
   for (ecs_entity_t i = 0; i < count; i++) {
-    ASSERT_EQ(ecs_type_contains(type, i + 1), true);
+    ASSERT_EQ(ecs_type_index_of(type, i + 1), (int)i);
   }
-  ASSERT_EQ(ecs_type_contains(type, 0), false);
+  ASSERT_EQ(ecs_type_index_of(type, 0), -1);
   ecs_type_free(type);
   PASS();
 }
@@ -200,9 +200,9 @@ TEST type_add_multiple_reversed(ecs_entity_t count) {
   }
 
   for (ecs_entity_t i = 0; i < count; i++) {
-    ASSERT_EQ(ecs_type_contains(type, count - i), true);
+    ASSERT(ecs_type_index_of(type, count - i) != -1);
   }
-  ASSERT_EQ(ecs_type_contains(type, 0), false);
+  ASSERT_EQ(ecs_type_index_of(type, 0), -1);
   ecs_type_free(type);
   PASS();
 }
@@ -222,7 +222,7 @@ TEST type_add_duplicate() {
   ecs_type_t *type = ecs_type_new(8);
   ecs_type_add(type, 1);
   ecs_type_add(type, 1);
-  ASSERT_EQ(ecs_type_contains(type, 1), true);
+  ASSERT_EQ(ecs_type_index_of(type, 1), 0);
   ecs_type_free(type);
   PASS();
 }
@@ -230,7 +230,7 @@ TEST type_add_duplicate() {
 TEST type_remove_from_empty() {
   ecs_type_t *type = ecs_type_new(8);
   ecs_type_remove(type, 1);
-  ASSERT_EQ(ecs_type_contains(type, 1), false);
+  ASSERT_EQ(ecs_type_index_of(type, 1), -1);
   ecs_type_free(type);
   PASS();
 }
@@ -239,7 +239,7 @@ TEST type_remove_from_1() {
   ecs_type_t *type = ecs_type_new(8);
   ecs_type_add(type, 1);
   ecs_type_remove(type, 1);
-  ASSERT_EQ(ecs_type_contains(type, 1), false);
+  ASSERT_EQ(ecs_type_index_of(type, 1), -1);
   ecs_type_free(type);
   PASS();
 }
@@ -251,9 +251,9 @@ TEST type_remove_from_many() {
   ecs_type_add(type, 5);
   ecs_type_remove(type, 2);
   ecs_type_add(type, 1);
-  ASSERT_EQ(ecs_type_contains(type, 2), false);
-  ASSERT_EQ(ecs_type_contains(type, 3), true);
-  ASSERT_EQ(ecs_type_contains(type, 5), true);
+  ASSERT_EQ(ecs_type_index_of(type, 2), -1);
+  ASSERT(ecs_type_index_of(type, 3) != -1);
+  ASSERT(ecs_type_index_of(type, 5) != -1);
   ecs_type_free(type);
   PASS();
 }
@@ -312,7 +312,35 @@ TEST ecs_minimal() {
   PASS();
 }
 
-SUITE(ecs) { RUN_TEST(ecs_minimal); }
+TEST ecs_register() {
+  ecs_registry_t *registry = ecs_init();
+  ECS_COMPONENT(registry, int);
+  ecs_destroy(registry);
+  PASS();
+}
+
+TEST ecs_create_entity() {
+  ecs_registry_t *registry = ecs_init();
+  ecs_entity_t e = ecs_entity(registry);
+  (void)e;
+  ecs_destroy(registry);
+  PASS();
+}
+
+TEST ecs_name_entity() {
+  ecs_registry_t *registry = ecs_init();
+  ecs_entity_t e = ecs_entity(registry);
+  ecs_name(registry, e, "Player");
+  ecs_destroy(registry);
+  PASS();
+}
+
+SUITE(ecs) {
+  RUN_TEST(ecs_minimal);
+  RUN_TEST(ecs_register);
+  RUN_TEST(ecs_create_entity);
+  RUN_TEST(ecs_name_entity);
+}
 
 GREATEST_MAIN_DEFS();
 

@@ -3,28 +3,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#define ECS_OFFSET(p, offset) ((void *)(((char *)(p)) + (offset)))
-
-#define OUT_OF_MEMORY 1
-#define TOO_MANY_COLLISIONS 2
-#define OUT_OF_BOUNDS 3
-
-static const char *ecs_error_to_str(uint32_t error) {
-  switch (error) {
-  case OUT_OF_MEMORY:
-    return "out of memory";
-  case TOO_MANY_COLLISIONS:
-    return "too many hash collisions";
-  case OUT_OF_BOUNDS:
-    return "index out of bounds";
-  }
-
-  return "unknown error";
-}
+#define OUT_OF_MEMORY "out of memory"
+#define NOT_IMPLEMENTED "not implemented"
 
 #define ECS_ABORT(error)                                                       \
-  fprintf(stderr, "ABORT %s:%d %s\n", __FILE__, __LINE__,                      \
-          ecs_error_to_str(error));                                            \
+  fprintf(stderr, "ABORT %s:%d %s\n", __FILE__, __LINE__, error);              \
   abort();
 
 #define ECS_ENSURE(cond, error)                                                \
@@ -39,6 +22,8 @@ static const char *ecs_error_to_str(uint32_t error) {
 #define ECS_ASSERT(cond, error)
 #endif
 
+#define ECS_OFFSET(p, offset) ((void *)(((char *)(p)) + (offset)))
+
 static inline void *ecs_malloc(size_t bytes) {
   void *mem = malloc(bytes);
   ECS_ENSURE(mem != NULL, OUT_OF_MEMORY);
@@ -51,10 +36,9 @@ static inline void *ecs_calloc(size_t items, size_t bytes) {
   return mem;
 }
 
-static inline void *ecs_realloc(void *mem, size_t bytes) {
-  mem = realloc(mem, bytes);
-  ECS_ENSURE(mem != NULL, OUT_OF_MEMORY);
-  return mem;
+static inline void ecs_realloc(void **mem, size_t bytes) {
+  *mem = realloc(*mem, bytes);
+  ECS_ENSURE(*mem != NULL, OUT_OF_MEMORY);
 }
 
 #define MAP_LOAD_FACTOR 0.5
@@ -140,8 +124,8 @@ static void ecs_map_grow(ecs_map_t *map, float growth_factor) {
   free(map->reverse_lookup);
   map->reverse_lookup =
       ecs_malloc(sizeof(uint32_t) * (new_capacity * MAP_LOAD_FACTOR + 1));
-  map->dense = ecs_realloc(
-      map->dense, map->item_size * (new_capacity * MAP_LOAD_FACTOR + 1));
+  ecs_realloc(&map->dense,
+              map->item_size * (new_capacity * MAP_LOAD_FACTOR + 1));
 
   for (uint32_t i = 0; i < map->load_capacity; i++) {
     ecs_bucket_t bucket = map->sparse[i];
@@ -185,7 +169,8 @@ void ecs_map_set(ecs_map_t *map, const void *key, const void *payload) {
     }
 
     i += next_pow_of_2(collisions++);
-    ECS_ASSERT(collisions < MAP_COLLISION_THRESHOLD, TOO_MANY_COLLISIONS);
+    ECS_ASSERT(collisions < MAP_COLLISION_THRESHOLD,
+               "too many hash collisions");
     bucket = &map->sparse[i % map->load_capacity];
   }
 
@@ -240,7 +225,7 @@ void ecs_map_remove(ecs_map_t *map, const void *key) {
   map->count--;
 }
 
-uint32_t ecs_hash_intptr(const void *key) {
+uint32_t ecs_map_hash_intptr(const void *key) {
   uintptr_t hashed = (uintptr_t)key;
   hashed = ((hashed >> 16) ^ hashed) * 0x45d9f3b;
   hashed = ((hashed >> 16) ^ hashed) * 0x45d9f3b;
@@ -248,9 +233,9 @@ uint32_t ecs_hash_intptr(const void *key) {
   return hashed;
 }
 
-uint32_t ecs_hash_string(const void *key) {
+uint32_t ecs_map_hash_string(const void *key) {
   char *str = (char *)key;
-  unsigned long hash = 5381;
+  uint32_t hash = 5381;
   char c;
 
   while ((c = *str++)) {
@@ -260,10 +245,21 @@ uint32_t ecs_hash_string(const void *key) {
   return hash;
 }
 
-bool ecs_equal_intptr(const void *a, const void *b) { return a == b; }
+uint32_t ecs_map_hash_type(const void *key) {
+  ecs_type_t *type = (ecs_type_t *)key;
+  uint32_t hash = 5381;
+  ECS_TYPE_EACH(type, e, { hash = ((hash << 5) + hash) + e; });
+  return hash;
+}
 
-bool ecs_equal_string(const void *a, const void *b) {
+bool ecs_map_equal_intptr(const void *a, const void *b) { return a == b; }
+
+bool ecs_map_equal_string(const void *a, const void *b) {
   return strcmp(a, b) == 0;
+}
+
+bool ecs_map_equal_type(const void *a, const void *b) {
+  return ecs_type_equal((ecs_type_t *)a, (ecs_type_t *)b);
 }
 
 #ifndef NDEBUG
@@ -307,12 +303,6 @@ void ecs_map_inspect(ecs_map_t *map) {
 }
 #endif // NDEBUG
 
-typedef struct ecs_type_t {
-  uint32_t count;
-  uint32_t capacity;
-  ecs_entity_t *elements;
-} ecs_type_t;
-
 ecs_type_t *ecs_type_new(uint32_t capacity) {
   ecs_type_t *type = ecs_malloc(sizeof(ecs_type_t));
   type->elements = ecs_malloc(sizeof(ecs_entity_t) * capacity);
@@ -335,6 +325,10 @@ ecs_type_t *ecs_type_copy(const ecs_type_t *from) {
   return type;
 }
 
+ecs_entity_t *ecs_type_get_array(ecs_type_t *type) { return type->elements; }
+
+uint32_t ecs_type_len(const ecs_type_t *type) { return type->count; }
+
 bool ecs_type_equal(const ecs_type_t *a, const ecs_type_t *b) {
   if (a == b) {
     return true;
@@ -353,21 +347,21 @@ bool ecs_type_equal(const ecs_type_t *a, const ecs_type_t *b) {
   return true;
 }
 
-bool ecs_type_contains(const ecs_type_t *type, ecs_entity_t e) {
+int32_t ecs_type_index_of(const ecs_type_t *type, ecs_entity_t e) {
   for (uint32_t i = 0; i < type->count; i++) {
     if (type->elements[i] == e) {
-      return true;
+      return i;
     }
   }
 
-  return false;
+  return -1;
 }
 
 void ecs_type_add(ecs_type_t *type, ecs_entity_t e) {
   if (type->count == type->capacity) {
     const uint32_t growth = 2;
-    type->elements = ecs_realloc(type->elements, sizeof(ecs_entity_t) *
-                                                     type->capacity * growth);
+    ecs_realloc((void **)&type->elements,
+                sizeof(ecs_entity_t) * type->capacity * growth);
     type->capacity *= growth;
   }
 
@@ -382,7 +376,7 @@ void ecs_type_add(ecs_type_t *type, ecs_entity_t e) {
 
   ecs_entity_t held = e;
   ecs_entity_t tmp;
-  while (i < type->count + 1) {
+  while (i < type->count) {
     tmp = type->elements[i];
     type->elements[i] = held;
     held = tmp;
@@ -403,7 +397,7 @@ void ecs_type_remove(ecs_type_t *type, ecs_entity_t e) {
     return;
   }
 
-  ECS_ASSERT(i < type->count, OUT_OF_BOUNDS);
+  ECS_ASSERT(i < type->count, "index out of bounds");
 
   while (i < type->count - 1) {
     type->elements[i] = type->elements[i + 1];
@@ -427,38 +421,82 @@ void ecs_type_inspect(ecs_type_t *type) {
   printf("}\n");
 }
 
-#define ARCHETYPE_INITIAL_CAPACITY 16
+#define ARCHETYPE_INITIAL_CAPACITY 128
 
-static ecs_archetype_t *ecs_archetype_new(ecs_type_t *type) {
+static void
+ecs_archetype_resize_component_array(ecs_archetype_t *archetype,
+                                     const ecs_map_t *component_index,
+                                     uint32_t capacity) {
+  uint32_t i = 0;
+  ECS_TYPE_EACH(archetype->type, e, {
+    size_t *component_size = ecs_map_get(component_index, (void *)e);
+    ECS_ENSURE(component_size != NULL, "failed lookup");
+    ecs_realloc(&archetype->components[i], sizeof(*component_size) * capacity);
+    i++;
+  });
+}
+
+ecs_archetype_t *ecs_archetype_new(ecs_type_t *type,
+                                   const ecs_map_t *component_index) {
   ecs_archetype_t *archetype = ecs_malloc(sizeof(ecs_archetype_t));
+
   archetype->capacity = ARCHETYPE_INITIAL_CAPACITY;
   archetype->count = 0;
   archetype->type = type;
   archetype->entity_ids =
       ecs_malloc(sizeof(ecs_entity_t) * ARCHETYPE_INITIAL_CAPACITY);
-  archetype->components =
-      ecs_malloc(sizeof(ecs_component_array_t) * ARCHETYPE_INITIAL_CAPACITY);
+  archetype->components = ecs_calloc(sizeof(void *), ecs_type_len(type));
+  archetype->edges = ecs_calloc(sizeof(ecs_edge_t *), 8);
+
+  ecs_archetype_resize_component_array(archetype, component_index,
+                                       ARCHETYPE_INITIAL_CAPACITY);
   return archetype;
 }
 
-static void ecs_archetype_free(ecs_archetype_t *archetype) {
+void ecs_archetype_free(ecs_archetype_t *archetype) {
+  uint32_t component_count = ecs_type_len(archetype->type);
+  for (uint32_t i = 0; i < component_count; i++) {
+    free(archetype->components[i]);
+  }
+  free(archetype->components);
+
   ecs_type_free(archetype->type);
   free(archetype->entity_ids);
-  free(archetype->components);
+  free(archetype->edges);
   free(archetype);
+}
+
+uint32_t ecs_archetype_add(ecs_archetype_t *archetype,
+                           ecs_map_t *component_index, ecs_entity_t e) {
+  if (archetype->count == archetype->capacity) {
+    const uint32_t growth = 2;
+    ecs_realloc((void **)&archetype->entity_ids,
+                sizeof(ecs_entity_t) * archetype->capacity * growth);
+    ecs_archetype_resize_component_array(archetype, component_index,
+                                         archetype->capacity * growth);
+  }
+
+  archetype->entity_ids[archetype->count] = e;
+  return archetype->count++;
 }
 
 ecs_registry_t *ecs_init() {
   ecs_registry_t *registry = ecs_malloc(sizeof(ecs_registry_t));
-  registry->entity_index = ECS_MAP(intptr, ecs_entity_t, ecs_record_t, 64);
-  ecs_type_t *empty_type = ecs_type_new(1);
-  registry->root = ecs_archetype_new(empty_type);
+  registry->entity_index = ECS_MAP(intptr, ecs_entity_t, ecs_record_t, 128);
+  registry->component_index = ECS_MAP(intptr, ecs_entity_t, size_t, 16);
+  registry->named_entities = ECS_MAP(string, char *, ecs_entity_t, 128);
+  registry->type_index = ECS_MAP(type, ecs_type_t *, ecs_archetype_t *, 16);
+  registry->root =
+      ecs_archetype_new(ecs_type_new(0), registry->component_index);
   registry->next_entity_id = 1;
   return registry;
 }
 
 void ecs_destroy(ecs_registry_t *registry) {
   ecs_map_free(registry->entity_index);
+  ecs_map_free(registry->component_index);
+  ecs_map_free(registry->named_entities);
+  ecs_map_free(registry->type_index);
   ecs_archetype_free(registry->root);
   free(registry);
 }
@@ -466,7 +504,22 @@ void ecs_destroy(ecs_registry_t *registry) {
 ecs_entity_t ecs_entity(ecs_registry_t *registry) {
   ecs_archetype_t *root = registry->root;
   ecs_map_set(registry->entity_index, (void *)registry->next_entity_id,
-              &(ecs_record_t){.archetype = root, .row = root->count});
-  // root->entity_ids[root->count] = registry->next_entity_id;
+              &(ecs_record_t){root, root->count});
+  ecs_archetype_add(root, registry->component_index, registry->next_entity_id);
   return registry->next_entity_id++;
+}
+
+ecs_entity_t ecs_component(ecs_registry_t *registry, char *name,
+                           size_t component_size) {
+  ecs_map_set(registry->component_index, (void *)registry->next_entity_id,
+              &(size_t){component_size});
+  ecs_name(registry, registry->next_entity_id, name);
+  return registry->next_entity_id++;
+}
+
+void ecs_name(ecs_registry_t *registry, ecs_entity_t entity, char *name) {
+  char err[128];
+  sprintf(err, "registering component with existing name: %s", name);
+  ECS_ENSURE(ecs_map_get(registry->named_entities, name) == NULL, err);
+  ecs_map_set(registry->named_entities, name, &entity);
 }
