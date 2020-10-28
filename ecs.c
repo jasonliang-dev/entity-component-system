@@ -227,7 +227,9 @@ void ecs_map_remove(ecs_map_t *map, const void *key) {
   map->count--;
 }
 
-void *ecs_map_values(ecs_map_t *map) { return map->dense; }
+void *ecs_map_values(ecs_map_t *map) {
+  return ECS_OFFSET(map->dense, map->item_size);
+}
 
 uint32_t ecs_map_len(ecs_map_t *map) { return map->count; }
 
@@ -276,36 +278,36 @@ void ecs_map_inspect(ecs_map_t *map) {
          "  load_capacity: %d\n",
          map->item_size, map->count, map->load_capacity);
 
-  puts("  sparse: [\n");
+  printf("  sparse: [\n");
   for (uint32_t i = 0; i < map->load_capacity; i++) {
     ecs_bucket_t bucket = map->sparse[i];
     printf("    %d: { key: %lu, index: %d }\n", i, (uintptr_t)bucket.key,
            bucket.index);
   }
-  puts("  ]\n");
+  printf("  ]\n");
 
-  puts("  dense: [\n");
+  printf("  dense: [\n");
   for (uint32_t i = 0; i < map->load_capacity * MAP_LOAD_FACTOR + 1; i++) {
     if (i == map->count + 1) {
-      puts("    -- end of load --\n");
+      printf("    -- end of load --\n");
     }
 
     int item = *(int *)ECS_OFFSET(map->dense, map->item_size * i);
     printf("    %d: %d\n", i, item);
   }
-  puts("  ]\n");
+  printf("  ]\n");
 
-  puts("  reverse_lookup: [\n");
+  printf("  reverse_lookup: [\n");
   for (uint32_t i = 0; i < map->load_capacity * MAP_LOAD_FACTOR + 1; i++) {
     if (i == map->count + 1) {
-      puts("    -- end of load --\n");
+      printf("    -- end of load --\n");
     }
 
     printf("    %d: %d\n", i, map->reverse_lookup[i]);
   }
-  puts("  ]\n");
+  printf("  ]\n");
 
-  puts("}\n");
+  printf("}\n");
 }
 #endif // NDEBUG
 
@@ -414,17 +416,17 @@ void ecs_type_remove(ecs_type_t *type, ecs_entity_t e) {
 }
 
 void ecs_type_inspect(ecs_type_t *type) {
-  puts("\ntype: {\n");
+  printf("\ntype: {\n");
   printf("  capacity: %d\n", type->capacity);
   printf("  count: %d\n", type->count);
 
-  puts("  elements: [\n");
+  printf("  elements: [\n");
   for (uint32_t i = 0; i < type->count; i++) {
     printf("    %d: %lu\n", i, type->elements[i]);
   }
-  puts("  ]\n");
+  printf("  ]\n");
 
-  puts("}\n");
+  printf("}\n");
 }
 
 ecs_edge_list_t *ecs_edge_list_new() {
@@ -514,7 +516,7 @@ ecs_archetype_t *ecs_archetype_new(ecs_type_t *type,
 
   ecs_archetype_resize_component_array(archetype, component_index,
                                        ARCHETYPE_INITIAL_CAPACITY);
-  ecs_map_set(type_index, type, archetype);
+  ecs_map_set(type_index, type, &archetype);
 
   return archetype;
 }
@@ -529,7 +531,6 @@ void ecs_archetype_free(ecs_archetype_t *archetype) {
   ecs_type_free(archetype->type);
   ecs_edge_list_free(archetype->edges);
   free(archetype->entity_ids);
-  free(archetype->edges);
   free(archetype);
 }
 
@@ -568,22 +569,52 @@ ecs_entity_t ecs_archetype_remove(ecs_archetype_t *archetype,
   return removed;
 }
 
+#ifndef NDEBUG
+void ecs_archetype_inspect(ecs_archetype_t *archetype) {
+  printf("\narchetype: {\n");
+  printf("  self: %p\n", (void *)archetype);
+  printf("  capacity: %d\n", archetype->capacity);
+  printf("  count: %d\n", archetype->count);
+
+  printf("  type: %p\n", (void *)archetype->type);
+  printf("  type: [ ");
+  ECS_TYPE_EACH(archetype->type, e, { printf("%lu ", e); });
+  printf("]\n");
+
+  printf("  entity_ids: [\n");
+  for (uint32_t i = 0; i < archetype->count; i++) {
+    printf("    %lu\n", archetype->entity_ids[i]);
+  }
+  printf("  ]\n");
+
+  printf("  edges: [\n");
+  ECS_EDGE_LIST_EACH(archetype->edges, edge, {
+    printf("    { %lu, add = %p, remove = %p }\n", edge.component,
+           (void *)edge.add, (void *)edge.remove);
+  });
+  printf("  ]\n");
+
+  printf("}\n");
+}
+#endif
+
 ecs_registry_t *ecs_init() {
   ecs_registry_t *registry = ecs_malloc(sizeof(ecs_registry_t));
   registry->entity_index = ECS_MAP(intptr, ecs_entity_t, ecs_record_t, 16);
   registry->component_index = ECS_MAP(intptr, ecs_entity_t, size_t, 16);
   registry->type_index = ECS_MAP(type, ecs_type_t *, ecs_archetype_t *, 16);
   registry->named_entities = ECS_MAP(string, char *, ecs_entity_t, 16);
-  registry->root = ecs_archetype_new(ecs_type_new(0), registry->component_index,
+  ecs_type_t *root_type = ecs_type_new(0);
+  registry->root = ecs_archetype_new(root_type, registry->component_index,
                                      registry->type_index);
   registry->next_entity_id = 1;
   return registry;
 }
 
 void ecs_destroy(ecs_registry_t *registry) {
-  ECS_MAP_VALUES_EACH(registry->type_index, ecs_archetype_t, archetype,
-                      { ecs_archetype_free(archetype); });
-
+  ECS_MAP_VALUES_EACH(registry->type_index, ecs_archetype_t *, archetype, {
+    ecs_archetype_free(*archetype);
+  });
   ecs_map_free(registry->entity_index);
   ecs_map_free(registry->component_index);
   ecs_map_free(registry->type_index);
@@ -637,25 +668,25 @@ void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity,
   ecs_type_t *fini_type = ecs_type_copy(init_type);
   ecs_type_add(fini_type, component);
 
-  ecs_archetype_t *fini_archetype =
+  ecs_archetype_t **fini_archetype =
       ecs_map_get(registry->type_index, fini_type);
 
   if (fini_archetype == NULL) {
-    fini_archetype = ecs_archetype_new(fini_type, registry->component_index,
-                                       registry->type_index);
-    ecs_edge_t edge = {component, .add = fini_archetype,
+    *fini_archetype = ecs_archetype_new(fini_type, registry->component_index,
+                                        registry->type_index);
+    ecs_edge_t edge = {component, .add = *fini_archetype,
                        .remove = record->archetype};
     ecs_edge_list_add(record->archetype->edges, edge);
-    ecs_edge_list_add(fini_archetype->edges, edge);
+    ecs_edge_list_add((*fini_archetype)->edges, edge);
   }
 
   ecs_entity_t removed = ecs_archetype_remove(
       record->archetype, registry->component_index, record->row);
   ECS_ASSERT(removed == entity, "entity record mismatch");
   uint32_t row =
-      ecs_archetype_add(fini_archetype, registry->component_index, entity);
+      ecs_archetype_add(*fini_archetype, registry->component_index, entity);
   ecs_map_set(registry->entity_index, (void *)entity,
-              &(ecs_record_t){fini_archetype, row});
+              &(ecs_record_t){*fini_archetype, row});
 }
 
 void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity,
@@ -664,4 +695,19 @@ void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity,
       ecs_map_get(registry->named_entities, component_name);
   ECS_ENSURE(component != NULL, FAILED_LOOKUP);
   ecs_attach(registry, entity, *component);
+}
+
+void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
+             ecs_entity_t component, const void *data) {
+  size_t *component_size =
+      ecs_map_get(registry->component_index, (void *)component);
+  ECS_ENSURE(component_size != NULL, FAILED_LOOKUP);
+  ecs_record_t *record = ecs_map_get(registry->entity_index, (void *)entity);
+  ECS_ENSURE(record != NULL, FAILED_LOOKUP);
+  int32_t column = ecs_type_index_of(record->archetype->type, component);
+  ECS_ENSURE(column != -1, OUT_OF_BOUNDS);
+
+  void *component_array = record->archetype->components[column];
+  void *element = ECS_OFFSET(component_array, *component_size * record->row);
+  memcpy(element, data, *component_size);
 }

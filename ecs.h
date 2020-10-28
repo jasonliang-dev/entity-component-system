@@ -131,6 +131,10 @@ extern "C"
   ecs_entity_t ecs_archetype_remove(ecs_archetype_t *archetype,
                                     ecs_map_t *component_index, uint32_t row);
 
+#ifndef NDEBUG
+  void ecs_archetype_inspect(ecs_archetype_t *archetype);
+#endif
+
   typedef struct ecs_record_t {
     ecs_archetype_t *archetype;
     uint32_t row;
@@ -155,6 +159,8 @@ extern "C"
                   ecs_entity_t component);
   void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity,
                          char *component_name);
+  void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
+               ecs_entity_t component, const void *data);
 
 #define ECS_COMPONENT(registry, T) ecs_component(registry, #T, sizeof(T));
 
