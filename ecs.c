@@ -40,7 +40,9 @@ static inline void *ecs_calloc(size_t items, size_t bytes) {
 
 static inline void ecs_realloc(void **mem, size_t bytes) {
   *mem = realloc(*mem, bytes);
-  ECS_ENSURE(*mem != NULL, OUT_OF_MEMORY);
+  if (bytes != 0) {
+    ECS_ENSURE(*mem != NULL, OUT_OF_MEMORY);
+  }
 }
 
 #define MAP_LOAD_FACTOR 0.5
@@ -367,6 +369,10 @@ int32_t ecs_type_index_of(const ecs_type_t *type, ecs_entity_t e) {
 
 void ecs_type_add(ecs_type_t *type, ecs_entity_t e) {
   if (type->count == type->capacity) {
+    if (type->capacity == 0) {
+      type->capacity = 1;
+    }
+
     const uint32_t growth = 2;
     ecs_realloc((void **)&type->elements,
                 sizeof(ecs_entity_t) * type->capacity * growth);
@@ -612,9 +618,8 @@ ecs_registry_t *ecs_init() {
 }
 
 void ecs_destroy(ecs_registry_t *registry) {
-  ECS_MAP_VALUES_EACH(registry->type_index, ecs_archetype_t *, archetype, {
-    ecs_archetype_free(*archetype);
-  });
+  ECS_MAP_VALUES_EACH(registry->type_index, ecs_archetype_t *, archetype,
+                      { ecs_archetype_free(*archetype); });
   ecs_map_free(registry->entity_index);
   ecs_map_free(registry->component_index);
   ecs_map_free(registry->type_index);
@@ -668,25 +673,29 @@ void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity,
   ecs_type_t *fini_type = ecs_type_copy(init_type);
   ecs_type_add(fini_type, component);
 
-  ecs_archetype_t **fini_archetype =
+  ecs_archetype_t **fini_archetype_dp =
       ecs_map_get(registry->type_index, fini_type);
+  ecs_archetype_t *fini_archetype;
 
-  if (fini_archetype == NULL) {
-    *fini_archetype = ecs_archetype_new(fini_type, registry->component_index,
+  if (fini_archetype_dp == NULL) {
+    fini_archetype = ecs_archetype_new(fini_type, registry->component_index,
                                         registry->type_index);
-    ecs_edge_t edge = {component, .add = *fini_archetype,
+    ecs_edge_t edge = {component, .add = fini_archetype,
                        .remove = record->archetype};
     ecs_edge_list_add(record->archetype->edges, edge);
-    ecs_edge_list_add((*fini_archetype)->edges, edge);
+    ecs_edge_list_add(fini_archetype->edges, edge);
+  } else {
+    ecs_type_free(fini_type);
+    fini_archetype = *fini_archetype_dp;
   }
 
   ecs_entity_t removed = ecs_archetype_remove(
       record->archetype, registry->component_index, record->row);
   ECS_ASSERT(removed == entity, "entity record mismatch");
   uint32_t row =
-      ecs_archetype_add(*fini_archetype, registry->component_index, entity);
+      ecs_archetype_add(fini_archetype, registry->component_index, entity);
   ecs_map_set(registry->entity_index, (void *)entity,
-              &(ecs_record_t){*fini_archetype, row});
+              &(ecs_record_t){fini_archetype, row});
 }
 
 void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity,

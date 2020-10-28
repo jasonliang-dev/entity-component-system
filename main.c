@@ -335,11 +335,32 @@ TEST ecs_name_entity() {
   PASS();
 }
 
+TEST ecs_attach_component() {
+  ecs_registry_t *registry = ecs_init();
+  ecs_entity_t int_component = ECS_COMPONENT(registry, int);
+  ecs_entity_t e = ecs_entity(registry);
+  ecs_attach(registry, e, int_component);
+  ecs_destroy(registry);
+  PASS();
+}
+
+TEST ecs_set_component_data() {
+  ecs_registry_t *registry = ecs_init();
+  ecs_entity_t int_component = ECS_COMPONENT(registry, int);
+  ecs_entity_t e = ecs_entity(registry);
+  ecs_attach(registry, e, int_component);
+  ecs_set(registry, e, int_component, &(int){1});
+  ecs_destroy(registry);
+  PASS();
+}
+
 SUITE(ecs) {
+  RUN_TEST(ecs_attach_component);
   RUN_TEST(ecs_minimal);
   RUN_TEST(ecs_register);
   RUN_TEST(ecs_create_entity);
   RUN_TEST(ecs_name_entity);
+  RUN_TEST(ecs_set_component_data);
 }
 
 GREATEST_MAIN_DEFS();
