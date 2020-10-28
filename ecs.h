@@ -16,7 +16,8 @@ extern "C"
   typedef bool (*ecs_key_equal_fn)(const void *, const void *);
 
 #define ECS_MAP(fn, k, v, capacity)                                            \
-  ecs_map_new(sizeof(k), sizeof(v), ecs_map_hash_##fn, ecs_map_equal_##fn, capacity)
+  ecs_map_new(sizeof(k), sizeof(v), ecs_map_hash_##fn, ecs_map_equal_##fn,     \
+              capacity)
 
   ecs_map_t *ecs_map_new(size_t key_size, size_t item_size, ecs_hash_fn hash_fn,
                          ecs_key_equal_fn key_equal_fn, uint32_t capacity);
@@ -24,12 +25,24 @@ extern "C"
   void *ecs_map_get(const ecs_map_t *map, const void *key);
   void ecs_map_set(ecs_map_t *map, const void *key, const void *payload);
   void ecs_map_remove(ecs_map_t *map, const void *key);
+  void *ecs_map_values(ecs_map_t *map);
+  uint32_t ecs_map_len(ecs_map_t *map);
   uint32_t ecs_map_hash_intptr(const void *key);
   uint32_t ecs_map_hash_string(const void *key);
   uint32_t ecs_map_hash_type(const void *key);
   bool ecs_map_equal_intptr(const void *a, const void *b);
   bool ecs_map_equal_string(const void *a, const void *b);
   bool ecs_map_equal_type(const void *a, const void *b);
+
+#define ECS_MAP_VALUES_EACH(map, T, var, ...)                                  \
+  do {                                                                         \
+    uint32_t var##_count = ecs_map_len(map);                                   \
+    T *var##_values = ecs_map_values(map);                                     \
+    for (uint32_t var##_i = 0; var##_i < var##_count; var##_i++) {             \
+      T *var = &var##_values[var##_i];                                         \
+      __VA_ARGS__                                                              \
+    }                                                                          \
+  } while (0)
 
 #ifndef NDEBUG
   void ecs_map_inspect(ecs_map_t *map); // assumes keys and values are ints
@@ -57,13 +70,13 @@ extern "C"
   ecs_type_add(type, (ecs_component_t){e, sizeof(s)});
 
 #define ECS_TYPE_EACH(type, var, ...)                                          \
-  {                                                                            \
+  do {                                                                         \
     uint32_t var##_count = ecs_type_len(type);                                 \
     for (uint32_t var##_i = 0; var##_i < var##_count; var##_i++) {             \
       ecs_entity_t var = type->elements[var##_i];                              \
       __VA_ARGS__                                                              \
     }                                                                          \
-  }
+  } while (0)
 
 #ifndef NDEBUG
   void ecs_type_inspect(ecs_type_t *type);
@@ -77,21 +90,46 @@ extern "C"
     ecs_archetype_t *remove;
   } ecs_edge_t;
 
+  typedef struct ecs_edge_list_t {
+    uint32_t capacity;
+    uint32_t count;
+    ecs_edge_t *edges;
+  } ecs_edge_list_t;
+
+  ecs_edge_list_t *ecs_edge_list_new();
+  void ecs_edge_list_free(ecs_edge_list_t *edge_list);
+  uint32_t ecs_edge_list_len(const ecs_edge_list_t *edge_list);
+  void ecs_edge_list_add(ecs_edge_list_t *edge_list, ecs_edge_t edge);
+  void ecs_edge_list_remove(ecs_edge_list_t *edge_list, ecs_entity_t component);
+  ecs_edge_t *ecs_edge_list_find(ecs_edge_list_t *edge_list,
+                                 ecs_entity_t component);
+
+#define ECS_EDGE_LIST_EACH(edge_list, var, ...)                                \
+  do {                                                                         \
+    uint32_t var##_count = ecs_edge_list_len(edge_list);                       \
+    for (uint32_t var##_i = 0; var##_i < var##_count; var##_i++) {             \
+      ecs_edge_t var = edge_list->edges[var##_i];                              \
+      __VA_ARGS__                                                              \
+    }                                                                          \
+  } while (0)
+
   struct ecs_archetype_t {
     uint32_t capacity;
     uint32_t count;
-    uint32_t edges_allocd;
     ecs_type_t *type;
     ecs_entity_t *entity_ids;
     void **components;
-    ecs_edge_t **edges;
+    ecs_edge_list_t *edges;
   };
 
   ecs_archetype_t *ecs_archetype_new(ecs_type_t *type,
-                                     const ecs_map_t *component_index);
+                                     const ecs_map_t *component_index,
+                                     ecs_map_t *type_index);
   void ecs_archetype_free(ecs_archetype_t *archetype);
   uint32_t ecs_archetype_add(ecs_archetype_t *archetype,
                              ecs_map_t *component_index, ecs_entity_t e);
+  ecs_entity_t ecs_archetype_remove(ecs_archetype_t *archetype,
+                                    ecs_map_t *component_index, uint32_t row);
 
   typedef struct ecs_record_t {
     ecs_archetype_t *archetype;
@@ -99,10 +137,10 @@ extern "C"
   } ecs_record_t;
 
   typedef struct ecs_registry_t {
-    ecs_map_t *entity_index;
-    ecs_map_t *component_index;
-    ecs_map_t *named_entities;
-    ecs_map_t *type_index;
+    ecs_map_t *entity_index;    // <ecs_entity_t, ecs_record_t>
+    ecs_map_t *component_index; // <ecs_entity_t, size_t>
+    ecs_map_t *type_index;      // <ecs_type_t *, ecs_archetype_t *>
+    ecs_map_t *named_entities;  // <char *, ecs_entity_t>
     ecs_archetype_t *root;
     ecs_entity_t next_entity_id;
   } ecs_registry_t;
@@ -113,8 +151,10 @@ extern "C"
   ecs_entity_t ecs_component(ecs_registry_t *registry, char *name,
                              size_t component_size);
   void ecs_name(ecs_registry_t *registry, ecs_entity_t entity, char *name);
-  void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity, ecs_entity_t component);
-  void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity, char *component_name);
+  void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity,
+                  ecs_entity_t component);
+  void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity,
+                         char *component_name);
 
 #define ECS_COMPONENT(registry, T) ecs_component(registry, #T, sizeof(T));
 
