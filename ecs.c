@@ -421,6 +421,30 @@ void ecs_type_remove(ecs_type_t *type, ecs_entity_t e) {
   type->count--;
 }
 
+bool ecs_type_is_superset(const ecs_type_t *super, const ecs_type_t *sub) {
+  uint32_t left = 0, right = 0;
+  uint32_t super_len = ecs_type_len(super);
+  uint32_t sub_len = ecs_type_len(sub);
+
+  if (super_len < sub_len) {
+    return false;
+  }
+
+  while (left < super_len && right < sub_len) {
+    if (super->elements[left] < sub->elements[right]) {
+      left++;
+    } else if (super->elements[left] == sub->elements[right]) {
+      left++;
+      right++;
+    } else {
+      return false;
+    }
+  }
+
+  return right == sub_len;
+}
+
+#ifndef NDEBUG
 void ecs_type_inspect(ecs_type_t *type) {
   printf("\ntype: {\n");
   printf("  capacity: %d\n", type->capacity);
@@ -434,6 +458,7 @@ void ecs_type_inspect(ecs_type_t *type) {
 
   printf("}\n");
 }
+#endif
 
 ecs_edge_list_t *ecs_edge_list_new() {
   ecs_edge_list_t *edge_list = ecs_malloc(sizeof(ecs_edge_list_t));
@@ -518,7 +543,8 @@ ecs_archetype_t *ecs_archetype_new(ecs_type_t *type,
   archetype->entity_ids =
       ecs_malloc(sizeof(ecs_entity_t) * ARCHETYPE_INITIAL_CAPACITY);
   archetype->components = ecs_calloc(sizeof(void *), ecs_type_len(type));
-  archetype->edges = ecs_edge_list_new();
+  archetype->left_edges = ecs_edge_list_new();
+  archetype->right_edges = ecs_edge_list_new();
 
   ecs_archetype_resize_component_array(archetype, component_index,
                                        ARCHETYPE_INITIAL_CAPACITY);
@@ -535,13 +561,14 @@ void ecs_archetype_free(ecs_archetype_t *archetype) {
   free(archetype->components);
 
   ecs_type_free(archetype->type);
-  ecs_edge_list_free(archetype->edges);
+  ecs_edge_list_free(archetype->left_edges);
+  ecs_edge_list_free(archetype->right_edges);
   free(archetype->entity_ids);
   free(archetype);
 }
 
 uint32_t ecs_archetype_add(ecs_archetype_t *archetype,
-                           ecs_map_t *component_index, ecs_entity_t e) {
+                           const ecs_map_t *component_index, ecs_entity_t e) {
   if (archetype->count == archetype->capacity) {
     const uint32_t growth = 2;
     ecs_realloc((void **)&archetype->entity_ids,
@@ -554,25 +581,88 @@ uint32_t ecs_archetype_add(ecs_archetype_t *archetype,
   return archetype->count++;
 }
 
-ecs_entity_t ecs_archetype_remove(ecs_archetype_t *archetype,
-                                  ecs_map_t *component_index, uint32_t row) {
-  ECS_ENSURE(row < archetype->count, OUT_OF_BOUNDS);
-  ecs_entity_t removed = archetype->entity_ids[row];
-  archetype->entity_ids[row] = archetype->entity_ids[archetype->count - 1];
+uint32_t ecs_archetype_move_entity_right(ecs_archetype_t *left,
+                                         ecs_archetype_t *right,
+                                         const ecs_map_t *component_index,
+                                         uint32_t left_row) {
+  ECS_ENSURE(left_row < left->count, OUT_OF_BOUNDS);
+  ecs_entity_t removed = left->entity_ids[left_row];
+  left->entity_ids[left_row] = left->entity_ids[left->count - 1];
 
-  uint32_t i = 0;
-  ECS_TYPE_EACH(archetype->type, e, {
+  uint32_t right_row = ecs_archetype_add(right, component_index, removed);
+
+  uint32_t i = 0, j = 0;
+  ECS_TYPE_EACH(left->type, e, {
+    ECS_ASSERT(e >= right->type->elements[j], "elements in types mismatched");
+    while (e != right->type->elements[j]) {
+      j++;
+    }
     size_t *component_size = ecs_map_get(component_index, (void *)e);
     ECS_ASSERT(component_size != NULL, FAILED_LOOKUP);
-    void *left = ECS_OFFSET(archetype->components, *component_size * i);
-    void *right = ECS_OFFSET(archetype->components,
-                             *component_size * (archetype->count - 1));
-    memcpy(left, right, *component_size);
+    void *left_component_array = left->components[i];
+    void *right_component_array = right->components[j];
+    void *insert_component =
+        ECS_OFFSET(right_component_array, *component_size * right_row);
+    void *remove_component =
+        ECS_OFFSET(left_component_array, *component_size * left_row);
+    void *swap_component =
+        ECS_OFFSET(left_component_array, *component_size * (left->count - 1));
+    memcpy(insert_component, remove_component, *component_size);
+    memcpy(remove_component, swap_component, *component_size);
     i++;
   });
 
-  archetype->count--;
-  return removed;
+  left->count--;
+  return right_row;
+}
+
+static inline void ecs_archetype_make_edges(ecs_archetype_t *left,
+                                            ecs_archetype_t *right,
+                                            ecs_entity_t component) {
+  ecs_edge_list_add(left->right_edges, (ecs_edge_t){component, right});
+  ecs_edge_list_add(right->left_edges, (ecs_edge_t){component, left});
+}
+
+static void ecs_archetype_insert_vertex_help(ecs_archetype_t *node,
+                                             ecs_archetype_t *new_node) {
+  uint32_t node_type_len = ecs_type_len(node->type);
+  uint32_t new_type_len = ecs_type_len(new_node->type);
+
+  if (node_type_len > new_type_len - 1) {
+    return;
+  }
+
+  if (node_type_len < new_type_len - 1) {
+    ECS_EDGE_LIST_EACH(node->right_edges, edge, {
+      ecs_archetype_insert_vertex_help(edge.archetype, new_node);
+    });
+    return;
+  }
+
+  if (!ecs_type_is_superset(node->type, new_node->type)) {
+    return;
+  }
+
+  uint32_t i;
+  uint32_t new_node_type_len = ecs_type_len(new_node->type);
+  for (i = 0; i < new_node_type_len &&
+              node->type->elements[i] == new_node->type->elements[i];
+       i++)
+    ;
+  ecs_archetype_make_edges(new_node, node, node->type->elements[i]);
+}
+
+ecs_archetype_t *ecs_archetype_insert_vertex(ecs_archetype_t *root,
+                                             ecs_archetype_t *left_neighbour,
+                                             ecs_type_t *new_vertex_type,
+                                             ecs_entity_t component_for_edge,
+                                             const ecs_map_t *component_index,
+                                             ecs_map_t *type_index) {
+  ecs_archetype_t *vertex =
+      ecs_archetype_new(new_vertex_type, component_index, type_index);
+  ecs_archetype_make_edges(left_neighbour, vertex, component_for_edge);
+  ecs_archetype_insert_vertex_help(root, vertex);
+  return vertex;
 }
 
 #ifndef NDEBUG
@@ -593,10 +683,15 @@ void ecs_archetype_inspect(ecs_archetype_t *archetype) {
   }
   printf("  ]\n");
 
-  printf("  edges: [\n");
-  ECS_EDGE_LIST_EACH(archetype->edges, edge, {
-    printf("    { %lu, add = %p, remove = %p }\n", edge.component,
-           (void *)edge.add, (void *)edge.remove);
+  printf("  left_edges: [\n");
+  ECS_EDGE_LIST_EACH(archetype->left_edges, edge, {
+    printf("    { %lu, %p }\n", edge.component, (void *)edge.archetype);
+  });
+  printf("  ]\n");
+
+  printf("  right_edges: [\n");
+  ECS_EDGE_LIST_EACH(archetype->right_edges, edge, {
+    printf("    { %lu, %p }\n", edge.component, (void *)edge.archetype);
   });
   printf("  ]\n");
 
@@ -678,24 +773,19 @@ void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity,
   ecs_archetype_t *fini_archetype;
 
   if (fini_archetype_dp == NULL) {
-    fini_archetype = ecs_archetype_new(fini_type, registry->component_index,
-                                        registry->type_index);
-    ecs_edge_t edge = {component, .add = fini_archetype,
-                       .remove = record->archetype};
-    ecs_edge_list_add(record->archetype->edges, edge);
-    ecs_edge_list_add(fini_archetype->edges, edge);
+    fini_archetype = ecs_archetype_insert_vertex(
+        registry->root, record->archetype, fini_type, component,
+        registry->component_index, registry->type_index);
   } else {
     ecs_type_free(fini_type);
     fini_archetype = *fini_archetype_dp;
   }
 
-  ecs_entity_t removed = ecs_archetype_remove(
-      record->archetype, registry->component_index, record->row);
-  ECS_ASSERT(removed == entity, "entity record mismatch");
-  uint32_t row =
-      ecs_archetype_add(fini_archetype, registry->component_index, entity);
+  uint32_t new_row =
+      ecs_archetype_move_entity_right(record->archetype, fini_archetype,
+                                      registry->component_index, record->row);
   ecs_map_set(registry->entity_index, (void *)entity,
-              &(ecs_record_t){fini_archetype, row});
+              &(ecs_record_t){fini_archetype, new_row});
 }
 
 void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity,

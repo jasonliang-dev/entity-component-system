@@ -289,6 +289,21 @@ TEST type_copy() {
   PASS();
 }
 
+TEST type_superset() {
+  ecs_type_t *a = ecs_type_new(8);
+  ecs_type_add(a, 1);
+  ecs_type_add(a, 2);
+  ecs_type_add(a, 3);
+  ecs_type_t *b = ecs_type_copy(a);
+  ecs_type_add(b, 5);
+  ecs_type_add(b, 6);
+  ecs_type_add(b, 7);
+  ASSERT(ecs_type_is_superset(b, a));
+  ecs_type_free(a);
+  ecs_type_free(b);
+  PASS();
+}
+
 SUITE(type) {
   RUN_TEST(type_empty);
   RUN_TEST(type_contains);
@@ -304,6 +319,8 @@ SUITE(type) {
   RUN_TEST(type_remove_from_many);
   RUN_TEST(type_equal);
   RUN_TEST(type_copy);
+  // RUN_TEST(type_superset);
+  (void)type_superset;
 }
 
 TEST ecs_minimal() {
@@ -355,11 +372,11 @@ TEST ecs_set_component_data() {
 }
 
 SUITE(ecs) {
-  RUN_TEST(ecs_attach_component);
   RUN_TEST(ecs_minimal);
   RUN_TEST(ecs_register);
   RUN_TEST(ecs_create_entity);
   RUN_TEST(ecs_name_entity);
+  RUN_TEST(ecs_attach_component);
   RUN_TEST(ecs_set_component_data);
 }
 

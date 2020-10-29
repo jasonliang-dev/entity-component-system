@@ -65,6 +65,8 @@ extern "C"
   int32_t ecs_type_index_of(const ecs_type_t *type, ecs_entity_t e);
   void ecs_type_add(ecs_type_t *type, ecs_entity_t e);
   void ecs_type_remove(ecs_type_t *type, ecs_entity_t e);
+  ecs_type_t *ecs_type_diff(const ecs_type_t *a, const ecs_type_t *b);
+  bool ecs_type_is_superset(const ecs_type_t *super, const ecs_type_t *sub);
 
 #define ECS_TYPE_ADD(type, e, s)                                               \
   ecs_type_add(type, (ecs_component_t){e, sizeof(s)});
@@ -86,8 +88,7 @@ extern "C"
 
   typedef struct ecs_edge_t {
     ecs_entity_t component;
-    ecs_archetype_t *add;
-    ecs_archetype_t *remove;
+    ecs_archetype_t *archetype;
   } ecs_edge_t;
 
   typedef struct ecs_edge_list_t {
@@ -119,7 +120,8 @@ extern "C"
     ecs_type_t *type;
     ecs_entity_t *entity_ids;
     void **components;
-    ecs_edge_list_t *edges;
+    ecs_edge_list_t *left_edges;
+    ecs_edge_list_t *right_edges;
   };
 
   ecs_archetype_t *ecs_archetype_new(ecs_type_t *type,
@@ -127,10 +129,17 @@ extern "C"
                                      ecs_map_t *type_index);
   void ecs_archetype_free(ecs_archetype_t *archetype);
   uint32_t ecs_archetype_add(ecs_archetype_t *archetype,
-                             ecs_map_t *component_index, ecs_entity_t e);
-  ecs_entity_t ecs_archetype_remove(ecs_archetype_t *archetype,
-                                    ecs_map_t *component_index, uint32_t row);
-
+                             const ecs_map_t *component_index, ecs_entity_t e);
+  uint32_t ecs_archetype_move_entity_right(ecs_archetype_t *left,
+                                       ecs_archetype_t *right,
+                                       const ecs_map_t *component_index,
+                                       uint32_t row);
+  ecs_archetype_t *ecs_archetype_insert_vertex(ecs_archetype_t *root,
+                                               ecs_archetype_t *left_neighbour,
+                                               ecs_type_t *new_vertex_type,
+                                               ecs_entity_t component_for_edge,
+                                               const ecs_map_t *component_index,
+                                               ecs_map_t *type_index);
 #ifndef NDEBUG
   void ecs_archetype_inspect(ecs_archetype_t *archetype);
 #endif
@@ -139,6 +148,8 @@ extern "C"
     ecs_archetype_t *archetype;
     uint32_t row;
   } ecs_record_t;
+
+  typedef void (*ecs_system_fn)();
 
   typedef struct ecs_registry_t {
     ecs_map_t *entity_index;    // <ecs_entity_t, ecs_record_t>
@@ -161,6 +172,8 @@ extern "C"
                          char *component_name);
   void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
                ecs_entity_t component, const void *data);
+  void ecs_system(ecs_registry_t *registry, const ecs_type_t *type,
+                  ecs_system_fn system);
 
 #define ECS_COMPONENT(registry, T) ecs_component(registry, #T, sizeof(T));
 
