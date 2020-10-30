@@ -1,6 +1,8 @@
 #include "ecs.h"
 #include "greatest.h"
 
+#include <alloca.h>
+
 TEST map_empty() {
   ecs_map_t *map = ECS_MAP(intptr, int, int, 16);
   ecs_map_free(map);
@@ -371,7 +373,56 @@ TEST ecs_set_component_data() {
   PASS();
 }
 
+void print(ecs_view_t view) {
+  int *x = ecs_view(view, 0);
+  printf("x is: %d\n", *x);
+}
+
+TEST ecs_run_system() {
+  ecs_registry_t *registry = ecs_init();
+  ecs_entity_t int_component = ECS_COMPONENT(registry, int);
+  ecs_entity_t e = ecs_entity(registry);
+  ecs_attach(registry, e, int_component);
+  ecs_set(registry, e, int_component, &(int){0});
+  ecs_signature_t *sig = ecs_signature_new_n(1, int_component);
+  ecs_system(registry, sig, print);
+  ecs_step(registry);
+  ecs_destroy(registry);
+  PASS();
+}
+
+void move(ecs_view_t view) {
+  int *x = ecs_view(view, 0);
+  (*x)++;
+  printf("x is: %d\n", *x);
+}
+
+TEST ecs_run_system_loop() {
+  typedef int pos;
+  typedef int vel;
+
+  ecs_registry_t *registry = ecs_init();
+  ecs_entity_t pos_component = ECS_COMPONENT(registry, pos);
+  ecs_entity_t vel_component = ECS_COMPONENT(registry, vel);
+  ecs_entity_t e = ecs_entity(registry);
+  ecs_attach(registry, e, pos_component);
+  ecs_attach(registry, e, vel_component);
+  ecs_set(registry, e, pos_component, &(pos){0});
+  ecs_set(registry, e, vel_component, &(pos){1});
+  ecs_signature_t *sig = ecs_signature_new_n(2, pos_component, vel_component);
+  ecs_system(registry, sig, move);
+
+  for (int i = 0; i < 15; i++) {
+    ecs_step(registry);
+  }
+
+  ecs_destroy(registry);
+  PASS();
+}
+
 SUITE(ecs) {
+  RUN_TEST(ecs_run_system_loop);
+  RUN_TEST(ecs_run_system);
   RUN_TEST(ecs_minimal);
   RUN_TEST(ecs_register);
   RUN_TEST(ecs_create_entity);

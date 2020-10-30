@@ -65,7 +65,6 @@ extern "C"
   int32_t ecs_type_index_of(const ecs_type_t *type, ecs_entity_t e);
   void ecs_type_add(ecs_type_t *type, ecs_entity_t e);
   void ecs_type_remove(ecs_type_t *type, ecs_entity_t e);
-  ecs_type_t *ecs_type_diff(const ecs_type_t *a, const ecs_type_t *b);
   bool ecs_type_is_superset(const ecs_type_t *super, const ecs_type_t *sub);
 
 #define ECS_TYPE_ADD(type, e, s)                                               \
@@ -83,6 +82,16 @@ extern "C"
 #ifndef NDEBUG
   void ecs_type_inspect(ecs_type_t *type);
 #endif
+
+  typedef struct ecs_signature_t {
+    uint32_t count;
+    ecs_entity_t components[];
+  } ecs_signature_t;
+
+  ecs_signature_t *ecs_signature_new(uint32_t count);
+  ecs_signature_t *ecs_signature_new_n(uint32_t count, ...);
+  void ecs_signature_free(ecs_signature_t *sig);
+  ecs_type_t *ecs_signature_as_type(const ecs_signature_t *sig);
 
   typedef struct ecs_archetype_t ecs_archetype_t;
 
@@ -129,17 +138,23 @@ extern "C"
                                      ecs_map_t *type_index);
   void ecs_archetype_free(ecs_archetype_t *archetype);
   uint32_t ecs_archetype_add(ecs_archetype_t *archetype,
-                             const ecs_map_t *component_index, ecs_entity_t e);
+                             const ecs_map_t *component_index,
+                             ecs_map_t *entity_index, ecs_entity_t e);
   uint32_t ecs_archetype_move_entity_right(ecs_archetype_t *left,
-                                       ecs_archetype_t *right,
-                                       const ecs_map_t *component_index,
-                                       uint32_t row);
+                                           ecs_archetype_t *right,
+                                           const ecs_map_t *component_index,
+                                           ecs_map_t *entity_index,
+                                           uint32_t left_row);
   ecs_archetype_t *ecs_archetype_insert_vertex(ecs_archetype_t *root,
                                                ecs_archetype_t *left_neighbour,
                                                ecs_type_t *new_vertex_type,
                                                ecs_entity_t component_for_edge,
                                                const ecs_map_t *component_index,
                                                ecs_map_t *type_index);
+  ecs_archetype_t *ecs_archetype_traverse_and_create(
+      ecs_archetype_t *root, const ecs_type_t *type,
+      const ecs_map_t *component_index, ecs_map_t *type_index);
+
 #ifndef NDEBUG
   void ecs_archetype_inspect(ecs_archetype_t *archetype);
 #endif
@@ -151,9 +166,22 @@ extern "C"
 
   typedef void (*ecs_system_fn)();
 
+  typedef struct ecs_system_t {
+    ecs_archetype_t *archetype;
+    const ecs_signature_t *sig;
+    ecs_system_fn run;
+  } ecs_system_t;
+
+  typedef struct ecs_view_t {
+    void **component_arrays;
+    uint32_t *indices;
+    uint32_t row;
+  } ecs_view_t;
+
   typedef struct ecs_registry_t {
     ecs_map_t *entity_index;    // <ecs_entity_t, ecs_record_t>
     ecs_map_t *component_index; // <ecs_entity_t, size_t>
+    ecs_map_t *system_index;    // <ecs_entity_t, ecs_system_t>
     ecs_map_t *type_index;      // <ecs_type_t *, ecs_archetype_t *>
     ecs_map_t *named_entities;  // <char *, ecs_entity_t>
     ecs_archetype_t *root;
@@ -163,17 +191,20 @@ extern "C"
   ecs_registry_t *ecs_init(void);
   void ecs_destroy(ecs_registry_t *registry);
   ecs_entity_t ecs_entity(ecs_registry_t *registry);
-  ecs_entity_t ecs_component(ecs_registry_t *registry, char *name,
+  ecs_entity_t ecs_component(ecs_registry_t *registry, const char *name,
                              size_t component_size);
-  void ecs_name(ecs_registry_t *registry, ecs_entity_t entity, char *name);
+  ecs_entity_t ecs_system(ecs_registry_t *registry,
+                          const ecs_signature_t *signature,
+                          ecs_system_fn system);
+  void ecs_name(ecs_registry_t *registry, ecs_entity_t entity, const char *name);
   void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity,
                   ecs_entity_t component);
   void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity,
                          char *component_name);
   void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
                ecs_entity_t component, const void *data);
-  void ecs_system(ecs_registry_t *registry, const ecs_type_t *type,
-                  ecs_system_fn system);
+  void ecs_step(ecs_registry_t *registry);
+  void *ecs_view(ecs_view_t view, uint32_t column);
 
 #define ECS_COMPONENT(registry, T) ecs_component(registry, #T, sizeof(T));
 

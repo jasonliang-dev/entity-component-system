@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -std=gnu11 -Werror -Wall -Wextra -pedantic-errors -I.
+CFLAGS = -std=c99 -Werror -Wall -Wextra -pedantic-errors -I.
 DEPS = greatest.h ecs.h
 OBJ = main.o ecs.o
 

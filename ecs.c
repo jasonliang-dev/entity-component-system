@@ -1,12 +1,15 @@
 #include "ecs.h"
 
+#include <alloca.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 
 #define OUT_OF_MEMORY "out of memory"
 #define OUT_OF_BOUNDS "index out of bounds"
 #define FAILED_LOOKUP "lookup failed and returned null"
 #define NOT_IMPLEMENTED "not implemented"
+#define SOMETHING_TERRIBLE "something went terribly wrong"
 
 #define ECS_ABORT(error)                                                       \
   fprintf(stderr, "ABORT %s:%d %s\n", __FILE__, __LINE__, error);              \
@@ -212,6 +215,7 @@ void ecs_map_remove(ecs_map_t *map, const void *key) {
     return;
   }
 
+  // perhaps?: char tmp[map->item_size]
   void *tmp = alloca(map->item_size);
   void *left = ECS_OFFSET(map->dense, map->item_size * bucket.index);
   void *right = ECS_OFFSET(map->dense, map->item_size * map->count);
@@ -460,6 +464,40 @@ void ecs_type_inspect(ecs_type_t *type) {
 }
 #endif
 
+ecs_signature_t *ecs_signature_new(uint32_t count) {
+  ecs_signature_t *sig = ecs_malloc(sizeof(ecs_signature_t) * count);
+  sig->count = 0;
+  return sig;
+}
+
+ecs_signature_t *ecs_signature_new_n(uint32_t count, ...) {
+  ecs_signature_t *sig = ecs_malloc(sizeof(ecs_signature_t) * count);
+  sig->count = count;
+
+  va_list args;
+  va_start(args, count);
+
+  for (uint32_t i =0; i < count; i++) {
+    sig->components[i] = va_arg(args, ecs_entity_t);
+  }
+
+  va_end(args);
+
+  return sig;
+}
+
+void ecs_signature_free(ecs_signature_t *sig) { free(sig); }
+
+ecs_type_t *ecs_signature_as_type(const ecs_signature_t *sig) {
+  ecs_type_t *type = ecs_type_new(sig->count);
+
+  for (uint32_t i = 0; i < sig->count; i++) {
+    ecs_type_add(type, sig->components[i]);
+  }
+
+  return type;
+}
+
 ecs_edge_list_t *ecs_edge_list_new() {
   ecs_edge_list_t *edge_list = ecs_malloc(sizeof(ecs_edge_list_t));
   edge_list->capacity = 8;
@@ -568,7 +606,8 @@ void ecs_archetype_free(ecs_archetype_t *archetype) {
 }
 
 uint32_t ecs_archetype_add(ecs_archetype_t *archetype,
-                           const ecs_map_t *component_index, ecs_entity_t e) {
+                           const ecs_map_t *component_index,
+                           ecs_map_t *entity_index, ecs_entity_t e) {
   if (archetype->count == archetype->capacity) {
     const uint32_t growth = 2;
     ecs_realloc((void **)&archetype->entity_ids,
@@ -578,37 +617,47 @@ uint32_t ecs_archetype_add(ecs_archetype_t *archetype,
   }
 
   archetype->entity_ids[archetype->count] = e;
+  ecs_map_set(entity_index, (void *)e,
+              &(ecs_record_t){archetype, archetype->count});
+
   return archetype->count++;
 }
 
 uint32_t ecs_archetype_move_entity_right(ecs_archetype_t *left,
                                          ecs_archetype_t *right,
                                          const ecs_map_t *component_index,
+                                         ecs_map_t *entity_index,
                                          uint32_t left_row) {
   ECS_ENSURE(left_row < left->count, OUT_OF_BOUNDS);
   ecs_entity_t removed = left->entity_ids[left_row];
   left->entity_ids[left_row] = left->entity_ids[left->count - 1];
 
-  uint32_t right_row = ecs_archetype_add(right, component_index, removed);
+  uint32_t right_row =
+      ecs_archetype_add(right, component_index, entity_index, removed);
 
   uint32_t i = 0, j = 0;
   ECS_TYPE_EACH(left->type, e, {
     ECS_ASSERT(e >= right->type->elements[j], "elements in types mismatched");
+
     while (e != right->type->elements[j]) {
       j++;
     }
+
     size_t *component_size = ecs_map_get(component_index, (void *)e);
     ECS_ASSERT(component_size != NULL, FAILED_LOOKUP);
     void *left_component_array = left->components[i];
     void *right_component_array = right->components[j];
+
     void *insert_component =
         ECS_OFFSET(right_component_array, *component_size * right_row);
     void *remove_component =
         ECS_OFFSET(left_component_array, *component_size * left_row);
     void *swap_component =
         ECS_OFFSET(left_component_array, *component_size * (left->count - 1));
+
     memcpy(insert_component, remove_component, *component_size);
     memcpy(remove_component, swap_component, *component_size);
+
     i++;
   });
 
@@ -665,6 +714,62 @@ ecs_archetype_t *ecs_archetype_insert_vertex(ecs_archetype_t *root,
   return vertex;
 }
 
+static ecs_archetype_t *ecs_archetype_traverse_and_create_help(
+    ecs_archetype_t *vertex, const ecs_type_t *type, uint32_t stack_n,
+    ecs_entity_t acc[], uint32_t acc_top, ecs_archetype_t *root,
+    const ecs_map_t *component_index, ecs_map_t *type_index) {
+  if (stack_n == 0) {
+    ECS_ASSERT(ecs_type_equal(vertex->type, type), SOMETHING_TERRIBLE);
+    return vertex;
+  }
+
+  ECS_EDGE_LIST_EACH(vertex->right_edges, edge, {
+    if (ecs_type_index_of(type, edge.component) != -1) {
+      acc[acc_top] = edge.component;
+      return ecs_archetype_traverse_and_create_help(
+          edge.archetype, type, stack_n - 1, acc, acc_top + 1, root,
+          component_index, type_index);
+    }
+  });
+
+  uint32_t i;
+  ecs_type_t *new_type = ecs_type_new(acc_top);
+  for (i = 0; i < acc_top; i++) {
+    ecs_type_add(new_type, acc[i]);
+  }
+
+  i = 0;
+  ecs_entity_t new_component = 0;
+  ECS_TYPE_EACH(type, e, {
+    if (e != new_type->elements[i]) {
+      new_component = e;
+      ecs_type_add(new_type, new_component);
+      acc[acc_top] = new_component;
+      break;
+    }
+
+    i++;
+  });
+
+  ECS_ASSERT(new_component != 0, SOMETHING_TERRIBLE);
+  ecs_archetype_t *new_vertex = ecs_archetype_insert_vertex(
+      root, vertex, new_type, new_component, component_index, type_index);
+
+  return ecs_archetype_traverse_and_create_help(new_vertex, type, stack_n - 1,
+                                                acc, acc_top + 1, root,
+                                                component_index, type_index);
+}
+
+ecs_archetype_t *
+ecs_archetype_traverse_and_create(ecs_archetype_t *root, const ecs_type_t *type,
+                                  const ecs_map_t *component_index,
+                                  ecs_map_t *type_index) {
+  uint32_t len = ecs_type_len(type);
+  ecs_entity_t *acc = alloca(sizeof(ecs_entity_t) * len);
+  return ecs_archetype_traverse_and_create_help(root, type, len, acc, 0, root,
+                                                component_index, type_index);
+}
+
 #ifndef NDEBUG
 void ecs_archetype_inspect(ecs_archetype_t *archetype) {
   printf("\narchetype: {\n");
@@ -702,9 +807,11 @@ void ecs_archetype_inspect(ecs_archetype_t *archetype) {
 ecs_registry_t *ecs_init() {
   ecs_registry_t *registry = ecs_malloc(sizeof(ecs_registry_t));
   registry->entity_index = ECS_MAP(intptr, ecs_entity_t, ecs_record_t, 16);
-  registry->component_index = ECS_MAP(intptr, ecs_entity_t, size_t, 16);
-  registry->type_index = ECS_MAP(type, ecs_type_t *, ecs_archetype_t *, 16);
-  registry->named_entities = ECS_MAP(string, char *, ecs_entity_t, 16);
+  registry->component_index = ECS_MAP(intptr, ecs_entity_t, size_t, 8);
+  registry->system_index = ECS_MAP(intptr, ecs_entity_t, ecs_system_t, 4);
+  registry->type_index = ECS_MAP(type, ecs_type_t *, ecs_archetype_t *, 8);
+  registry->named_entities = ECS_MAP(string, char *, ecs_entity_t, 8);
+
   ecs_type_t *root_type = ecs_type_new(0);
   registry->root = ecs_archetype_new(root_type, registry->component_index,
                                      registry->type_index);
@@ -715,23 +822,25 @@ ecs_registry_t *ecs_init() {
 void ecs_destroy(ecs_registry_t *registry) {
   ECS_MAP_VALUES_EACH(registry->type_index, ecs_archetype_t *, archetype,
                       { ecs_archetype_free(*archetype); });
+  ecs_map_free(registry->type_index);
   ecs_map_free(registry->entity_index);
   ecs_map_free(registry->component_index);
-  ecs_map_free(registry->type_index);
+  ecs_map_free(registry->system_index);
   ecs_map_free(registry->named_entities);
   free(registry);
 }
 
 ecs_entity_t ecs_entity(ecs_registry_t *registry) {
   ecs_archetype_t *root = registry->root;
-  uint32_t row = ecs_archetype_add(root, registry->component_index,
-                                   registry->next_entity_id);
+  uint32_t row =
+      ecs_archetype_add(root, registry->component_index, registry->entity_index,
+                        registry->next_entity_id);
   ecs_map_set(registry->entity_index, (void *)registry->next_entity_id,
               &(ecs_record_t){root, row});
   return registry->next_entity_id++;
 }
 
-ecs_entity_t ecs_component(ecs_registry_t *registry, char *name,
+ecs_entity_t ecs_component(ecs_registry_t *registry, const char *name,
                            size_t component_size) {
   ecs_map_set(registry->component_index, (void *)registry->next_entity_id,
               &(size_t){component_size});
@@ -739,7 +848,27 @@ ecs_entity_t ecs_component(ecs_registry_t *registry, char *name,
   return registry->next_entity_id++;
 }
 
-void ecs_name(ecs_registry_t *registry, ecs_entity_t entity, char *name) {
+ecs_entity_t ecs_system(ecs_registry_t *registry,
+                        const ecs_signature_t *signature,
+                        ecs_system_fn system) {
+  ecs_type_t *type = ecs_signature_as_type(signature);
+  ecs_archetype_t **maybe_archetype = ecs_map_get(registry->type_index, type);
+  ecs_archetype_t *archetype;
+
+  if (maybe_archetype == NULL) {
+    archetype = ecs_archetype_traverse_and_create(
+        registry->root, type, registry->component_index, registry->type_index);
+  } else {
+    archetype = *maybe_archetype;
+    ecs_type_free(type);
+  }
+
+  ecs_map_set(registry->system_index, (void *)registry->next_entity_id,
+              &(ecs_system_t){archetype, signature, system});
+  return registry->next_entity_id++;
+}
+
+void ecs_name(ecs_registry_t *registry, ecs_entity_t entity, const char *name) {
   char err[128];
   sprintf(err, "registering component with duplicate name: %s", name);
   ECS_ENSURE(ecs_map_get(registry->named_entities, name) == NULL, err);
@@ -768,22 +897,22 @@ void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity,
   ecs_type_t *fini_type = ecs_type_copy(init_type);
   ecs_type_add(fini_type, component);
 
-  ecs_archetype_t **fini_archetype_dp =
+  ecs_archetype_t **maybe_fini_archetype =
       ecs_map_get(registry->type_index, fini_type);
   ecs_archetype_t *fini_archetype;
 
-  if (fini_archetype_dp == NULL) {
+  if (maybe_fini_archetype == NULL) {
     fini_archetype = ecs_archetype_insert_vertex(
         registry->root, record->archetype, fini_type, component,
         registry->component_index, registry->type_index);
   } else {
     ecs_type_free(fini_type);
-    fini_archetype = *fini_archetype_dp;
+    fini_archetype = *maybe_fini_archetype;
   }
 
-  uint32_t new_row =
-      ecs_archetype_move_entity_right(record->archetype, fini_archetype,
-                                      registry->component_index, record->row);
+  uint32_t new_row = ecs_archetype_move_entity_right(
+      record->archetype, fini_archetype, registry->component_index,
+      registry->entity_index, record->row);
   ecs_map_set(registry->entity_index, (void *)entity,
               &(ecs_record_t){fini_archetype, new_row});
 }
@@ -801,12 +930,50 @@ void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
   size_t *component_size =
       ecs_map_get(registry->component_index, (void *)component);
   ECS_ENSURE(component_size != NULL, FAILED_LOOKUP);
+
   ecs_record_t *record = ecs_map_get(registry->entity_index, (void *)entity);
   ECS_ENSURE(record != NULL, FAILED_LOOKUP);
+
   int32_t column = ecs_type_index_of(record->archetype->type, component);
   ECS_ENSURE(column != -1, OUT_OF_BOUNDS);
 
   void *component_array = record->archetype->components[column];
   void *element = ECS_OFFSET(component_array, *component_size * record->row);
   memcpy(element, data, *component_size);
+}
+
+static void ecs_step_help(ecs_archetype_t *archetype, const ecs_signature_t *sig,
+                          ecs_system_fn run) {
+  if (archetype == NULL) {
+    return;
+  }
+
+  uint32_t columns[sig->count];
+
+  for (uint32_t slow = 0; slow < sig->count; slow++) {
+    uint32_t type_len = ecs_type_len(archetype->type);
+    for (uint32_t fast = 0; fast < type_len; fast++) {
+      if (archetype->type->elements[fast] == sig->components[slow]) {
+        columns[slow] = fast;
+        break;
+      }
+    }
+  }
+
+  for (uint32_t i = 0; i < archetype->count; i++) {
+    run((ecs_view_t){archetype->components, columns, i});
+  }
+
+  ECS_EDGE_LIST_EACH(archetype->right_edges, edge,
+                     { ecs_step_help(edge.archetype, sig, run); });
+}
+
+void ecs_step(ecs_registry_t *registry) {
+  ECS_MAP_VALUES_EACH(registry->system_index, ecs_system_t, sys,
+                      { ecs_step_help(sys->archetype, sys->sig, sys->run); });
+}
+
+void *ecs_view(ecs_view_t view, uint32_t column) {
+  void *component_array = view.component_arrays[view.indices[column]];
+  return ECS_OFFSET(component_array, view.row);
 }
