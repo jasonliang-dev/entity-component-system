@@ -346,14 +346,6 @@ TEST ecs_create_entity() {
   PASS();
 }
 
-TEST ecs_name_entity() {
-  ecs_registry_t *registry = ecs_init();
-  ecs_entity_t e = ecs_entity(registry);
-  ecs_name(registry, e, "Player");
-  ecs_destroy(registry);
-  PASS();
-}
-
 TEST ecs_attach_component() {
   ecs_registry_t *registry = ecs_init();
   ecs_entity_t int_component = ECS_COMPONENT(registry, int);
@@ -425,7 +417,6 @@ SUITE(ecs) {
   RUN_TEST(ecs_minimal);
   RUN_TEST(ecs_register);
   RUN_TEST(ecs_create_entity);
-  RUN_TEST(ecs_name_entity);
   RUN_TEST(ecs_attach_component);
   RUN_TEST(ecs_set_component_data);
 }

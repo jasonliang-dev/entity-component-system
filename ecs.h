@@ -116,8 +116,10 @@ extern "C"
   } while (0)
 
   // -- ARCHETYPE --------------------------------------------------------------
-  // graph vertex. archetypes are tables that stores component data for each
-  // entity.
+  // graph vertex. archetypes are tables where columns represent component data
+  // and rows represent each entity. left edges point to other archetypes with
+  // one less component, and right edges point to archetypes that store one
+  // additional component.
 
   typedef struct ecs_archetype_t ecs_archetype_t;
 
@@ -148,7 +150,7 @@ extern "C"
 #endif
 
   // -- ENTITY COMPONENT SYSTEM ------------------------------------------------
-  // public api
+  // functions below is the public api
 
   typedef struct ecs_view_t {
     void **component_arrays;
@@ -162,22 +164,17 @@ extern "C"
   ecs_registry_t *ecs_init(void);
   void ecs_destroy(ecs_registry_t *registry);
   ecs_entity_t ecs_entity(ecs_registry_t *registry);
-  ecs_entity_t ecs_component(ecs_registry_t *registry, const char *name,
-                             size_t component_size);
+  ecs_entity_t ecs_component(ecs_registry_t *registry, size_t component_size);
   ecs_entity_t ecs_system(ecs_registry_t *registry, ecs_signature_t *signature,
                           ecs_system_fn system);
-  void ecs_name(ecs_registry_t *registry, ecs_entity_t entity,
-                const char *name);
   void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity,
                   ecs_entity_t component);
-  void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity,
-                         char *component_name);
   void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
                ecs_entity_t component, const void *data);
   void ecs_step(ecs_registry_t *registry);
   void *ecs_view(ecs_view_t view, uint32_t row, uint32_t column);
 
-#define ECS_COMPONENT(registry, T) ecs_component(registry, #T, sizeof(T));
+#define ECS_COMPONENT(registry, T) ecs_component(registry, sizeof(T));
 #define ECS_SYSTEM(registry, system, n, ...)                                   \
   ecs_system(registry, ecs_signature_new_n(n, __VA_ARGS__), system)
 

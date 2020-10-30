@@ -113,7 +113,6 @@ struct ecs_registry_t {
   ecs_map_t *component_index; // <ecs_entity_t, size_t>
   ecs_map_t *system_index;    // <ecs_entity_t, ecs_system_t>
   ecs_map_t *type_index;      // <ecs_type_t *, ecs_archetype_t *>
-  ecs_map_t *named_entities;  // <char *, ecs_entity_t>
   ecs_archetype_t *root;
   ecs_entity_t next_entity_id;
 };
@@ -515,7 +514,8 @@ void ecs_type_inspect(ecs_type_t *type) {
 #endif
 
 ecs_signature_t *ecs_signature_new(uint32_t count) {
-  ecs_signature_t *sig = ecs_malloc(sizeof(ecs_signature_t) + (sizeof(ecs_entity_t) * count));
+  ecs_signature_t *sig =
+      ecs_malloc(sizeof(ecs_signature_t) + (sizeof(ecs_entity_t) * count));
   sig->count = 0;
   return sig;
 }
@@ -849,7 +849,6 @@ ecs_registry_t *ecs_init(void) {
   registry->component_index = ECS_MAP(intptr, ecs_entity_t, size_t, 8);
   registry->system_index = ECS_MAP(intptr, ecs_entity_t, ecs_system_t, 4);
   registry->type_index = ECS_MAP(type, ecs_type_t *, ecs_archetype_t *, 8);
-  registry->named_entities = ECS_MAP(string, char *, ecs_entity_t, 8);
 
   ecs_type_t *root_type = ecs_type_new(0);
   registry->root = ecs_archetype_new(root_type, registry->component_index,
@@ -867,7 +866,6 @@ void ecs_destroy(ecs_registry_t *registry) {
   ecs_map_free(registry->entity_index);
   ecs_map_free(registry->component_index);
   ecs_map_free(registry->system_index);
-  ecs_map_free(registry->named_entities);
   free(registry);
 }
 
@@ -881,11 +879,9 @@ ecs_entity_t ecs_entity(ecs_registry_t *registry) {
   return registry->next_entity_id++;
 }
 
-ecs_entity_t ecs_component(ecs_registry_t *registry, const char *name,
-                           size_t component_size) {
+ecs_entity_t ecs_component(ecs_registry_t *registry, size_t component_size) {
   ecs_map_set(registry->component_index, (void *)registry->next_entity_id,
               &(size_t){component_size});
-  ecs_name(registry, registry->next_entity_id, name);
   return registry->next_entity_id++;
 }
 
@@ -908,28 +904,14 @@ ecs_entity_t ecs_system(ecs_registry_t *registry, ecs_signature_t *signature,
   return registry->next_entity_id++;
 }
 
-void ecs_name(ecs_registry_t *registry, ecs_entity_t entity, const char *name) {
-  char err[128];
-  sprintf(err, "registering component with duplicate name: %s", name);
-  ECS_ENSURE(ecs_map_get(registry->named_entities, name) == NULL, err);
-  ecs_map_set(registry->named_entities, name, &entity);
-}
-
 void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity,
                 ecs_entity_t component) {
   ecs_record_t *record = ecs_map_get(registry->entity_index, (void *)entity);
 
   if (record == NULL) {
     char err[255];
-    char *name = ecs_map_get(registry->named_entities, (void *)component);
-    if (name == NULL) {
-      sprintf(err, "attaching unknown component %lu to unknown entity %lu",
-              component, entity);
-    } else {
-      sprintf(err, "attaching component %lu (aka '%s') to unknown entity %lu",
-              component, name, entity);
-    }
-
+    sprintf(err, "attaching component %lu to unknown entity %lu", component,
+            entity);
     ECS_ABORT(err);
   }
 
@@ -955,14 +937,6 @@ void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity,
       registry->entity_index, record->row);
   ecs_map_set(registry->entity_index, (void *)entity,
               &(ecs_record_t){fini_archetype, new_row});
-}
-
-void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity,
-                       char *component_name) {
-  ecs_entity_t *component =
-      ecs_map_get(registry->named_entities, component_name);
-  ECS_ENSURE(component != NULL, FAILED_LOOKUP);
-  ecs_attach(registry, entity, *component);
 }
 
 void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
