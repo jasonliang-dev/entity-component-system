@@ -268,8 +268,7 @@ void ecs_map_remove(ecs_map_t *map, const void *key) {
     return;
   }
 
-  // perhaps?: char tmp[map->item_size]
-  void *tmp = alloca(map->item_size);
+  char *tmp[map->item_size];
   void *left = ECS_OFFSET(map->dense, map->item_size * bucket.index);
   void *right = ECS_OFFSET(map->dense, map->item_size * map->count);
   memcpy(tmp, left, map->item_size);
@@ -516,13 +515,13 @@ void ecs_type_inspect(ecs_type_t *type) {
 #endif
 
 ecs_signature_t *ecs_signature_new(uint32_t count) {
-  ecs_signature_t *sig = ecs_malloc(sizeof(ecs_signature_t) * count);
+  ecs_signature_t *sig = ecs_malloc(sizeof(ecs_signature_t) + (sizeof(ecs_entity_t) * count));
   sig->count = 0;
   return sig;
 }
 
 ecs_signature_t *ecs_signature_new_n(uint32_t count, ...) {
-  ecs_signature_t *sig = ecs_malloc(sizeof(ecs_signature_t) * count);
+  ecs_signature_t *sig = ecs_signature_new(count);
   sig->count = count;
 
   va_list args;
