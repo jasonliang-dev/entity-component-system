@@ -603,6 +603,7 @@ ecs_archetype_resize_component_array(ecs_archetype_t *archetype,
     size_t *component_size = ecs_map_get(component_index, (void *)e);
     ECS_ASSERT(component_size != NULL, FAILED_LOOKUP);
     ecs_realloc(&archetype->components[i], sizeof(*component_size) * capacity);
+    archetype->capacity = capacity;
     i++;
   });
 }
