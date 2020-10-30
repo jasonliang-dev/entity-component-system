@@ -373,8 +373,8 @@ TEST ecs_set_component_data() {
   PASS();
 }
 
-void print(ecs_view_t view) {
-  int *x = ecs_view(view, 0);
+void print(ecs_view_t view, unsigned int row) {
+  int *x = ecs_view(view, row, 0);
   printf("x is: %d\n", *x);
 }
 
@@ -391,8 +391,8 @@ TEST ecs_run_system() {
   PASS();
 }
 
-void move(ecs_view_t view) {
-  int *x = ecs_view(view, 0);
+void move(ecs_view_t view, unsigned int row) {
+  int *x = ecs_view(view, row, 0);
   (*x)++;
   printf("x is: %d\n", *x);
 }
@@ -409,8 +409,7 @@ TEST ecs_run_system_loop() {
   ecs_attach(registry, e, vel_component);
   ecs_set(registry, e, pos_component, &(pos){0});
   ecs_set(registry, e, vel_component, &(pos){1});
-  ecs_signature_t *sig = ecs_signature_new_n(2, pos_component, vel_component);
-  ecs_system(registry, sig, move);
+  ECS_SYSTEM(registry, move, 2, pos_component, vel_component);
 
   for (int i = 0; i < 15; i++) {
     ecs_step(registry);

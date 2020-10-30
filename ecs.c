@@ -1,9 +1,9 @@
 #include "ecs.h"
 
 #include <alloca.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdarg.h>
 
 #define OUT_OF_MEMORY "out of memory"
 #define OUT_OF_BOUNDS "index out of bounds"
@@ -48,10 +48,6 @@ static inline void ecs_realloc(void **mem, size_t bytes) {
   }
 }
 
-#define MAP_LOAD_FACTOR 0.5
-#define MAP_COLLISION_THRESHOLD 30
-#define MAP_TOMESTONE ((uint32_t)-1)
-
 typedef struct ecs_bucket_t {
   const void *key;
   uint32_t index;
@@ -68,6 +64,63 @@ struct ecs_map_t {
   uint32_t *reverse_lookup;
   void *dense;
 };
+
+struct ecs_type_t {
+  uint32_t capacity;
+  uint32_t count;
+  ecs_entity_t *elements;
+};
+
+struct ecs_signature_t {
+  uint32_t count;
+  ecs_entity_t components[];
+};
+
+typedef struct ecs_system_t {
+  ecs_archetype_t *archetype;
+  ecs_signature_t *sig;
+  ecs_system_fn run;
+} ecs_system_t;
+
+struct ecs_edge_t {
+  ecs_entity_t component;
+  ecs_archetype_t *archetype;
+};
+
+struct ecs_edge_list_t {
+  uint32_t capacity;
+  uint32_t count;
+  ecs_edge_t *edges;
+};
+
+typedef struct ecs_record_t {
+  ecs_archetype_t *archetype;
+  uint32_t row;
+} ecs_record_t;
+
+struct ecs_archetype_t {
+  uint32_t capacity;
+  uint32_t count;
+  ecs_type_t *type;
+  ecs_entity_t *entity_ids;
+  void **components;
+  ecs_edge_list_t *left_edges;
+  ecs_edge_list_t *right_edges;
+};
+
+struct ecs_registry_t {
+  ecs_map_t *entity_index;    // <ecs_entity_t, ecs_record_t>
+  ecs_map_t *component_index; // <ecs_entity_t, size_t>
+  ecs_map_t *system_index;    // <ecs_entity_t, ecs_system_t>
+  ecs_map_t *type_index;      // <ecs_type_t *, ecs_archetype_t *>
+  ecs_map_t *named_entities;  // <char *, ecs_entity_t>
+  ecs_archetype_t *root;
+  ecs_entity_t next_entity_id;
+};
+
+#define MAP_LOAD_FACTOR 0.5
+#define MAP_COLLISION_THRESHOLD 30
+#define MAP_TOMESTONE ((uint32_t)-1)
 
 ecs_map_t *ecs_map_new(size_t key_size, size_t item_size, ecs_hash_fn hash_fn,
                        ecs_key_equal_fn key_equal_fn, uint32_t capacity) {
@@ -339,8 +392,6 @@ ecs_type_t *ecs_type_copy(const ecs_type_t *from) {
   return type;
 }
 
-ecs_entity_t *ecs_type_get_array(ecs_type_t *type) { return type->elements; }
-
 uint32_t ecs_type_len(const ecs_type_t *type) { return type->count; }
 
 bool ecs_type_equal(const ecs_type_t *a, const ecs_type_t *b) {
@@ -477,7 +528,7 @@ ecs_signature_t *ecs_signature_new_n(uint32_t count, ...) {
   va_list args;
   va_start(args, count);
 
-  for (uint32_t i =0; i < count; i++) {
+  for (uint32_t i = 0; i < count; i++) {
     sig->components[i] = va_arg(args, ecs_entity_t);
   }
 
@@ -498,7 +549,7 @@ ecs_type_t *ecs_signature_as_type(const ecs_signature_t *sig) {
   return type;
 }
 
-ecs_edge_list_t *ecs_edge_list_new() {
+ecs_edge_list_t *ecs_edge_list_new(void) {
   ecs_edge_list_t *edge_list = ecs_malloc(sizeof(ecs_edge_list_t));
   edge_list->capacity = 8;
   edge_list->count = 0;
@@ -540,17 +591,6 @@ void ecs_edge_list_remove(ecs_edge_list_t *edge_list, ecs_entity_t component) {
   ecs_edge_t tmp = edges[i];
   edges[i] = edges[edge_list->count];
   edges[edge_list->count--] = tmp;
-}
-
-ecs_edge_t *ecs_edge_list_find(ecs_edge_list_t *edge_list,
-                               ecs_entity_t component) {
-  for (uint32_t i = 0; i < edge_list->count; i++) {
-    if (edge_list->edges[i].component == component) {
-      return &edge_list->edges[i];
-    }
-  }
-
-  return NULL;
 }
 
 #define ARCHETYPE_INITIAL_CAPACITY 16
@@ -628,7 +668,7 @@ uint32_t ecs_archetype_move_entity_right(ecs_archetype_t *left,
                                          const ecs_map_t *component_index,
                                          ecs_map_t *entity_index,
                                          uint32_t left_row) {
-  ECS_ENSURE(left_row < left->count, OUT_OF_BOUNDS);
+  ECS_ASSERT(left_row < left->count, OUT_OF_BOUNDS);
   ecs_entity_t removed = left->entity_ids[left_row];
   left->entity_ids[left_row] = left->entity_ids[left->count - 1];
 
@@ -804,7 +844,7 @@ void ecs_archetype_inspect(ecs_archetype_t *archetype) {
 }
 #endif
 
-ecs_registry_t *ecs_init() {
+ecs_registry_t *ecs_init(void) {
   ecs_registry_t *registry = ecs_malloc(sizeof(ecs_registry_t));
   registry->entity_index = ECS_MAP(intptr, ecs_entity_t, ecs_record_t, 16);
   registry->component_index = ECS_MAP(intptr, ecs_entity_t, size_t, 8);
@@ -820,6 +860,8 @@ ecs_registry_t *ecs_init() {
 }
 
 void ecs_destroy(ecs_registry_t *registry) {
+  ECS_MAP_VALUES_EACH(registry->system_index, ecs_system_t, system,
+                      { ecs_signature_free(system->sig); });
   ECS_MAP_VALUES_EACH(registry->type_index, ecs_archetype_t *, archetype,
                       { ecs_archetype_free(*archetype); });
   ecs_map_free(registry->type_index);
@@ -848,8 +890,7 @@ ecs_entity_t ecs_component(ecs_registry_t *registry, const char *name,
   return registry->next_entity_id++;
 }
 
-ecs_entity_t ecs_system(ecs_registry_t *registry,
-                        const ecs_signature_t *signature,
+ecs_entity_t ecs_system(ecs_registry_t *registry, ecs_signature_t *signature,
                         ecs_system_fn system) {
   ecs_type_t *type = ecs_signature_as_type(signature);
   ecs_archetype_t **maybe_archetype = ecs_map_get(registry->type_index, type);
@@ -942,8 +983,8 @@ void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
   memcpy(element, data, *component_size);
 }
 
-static void ecs_step_help(ecs_archetype_t *archetype, const ecs_signature_t *sig,
-                          ecs_system_fn run) {
+static void ecs_step_help(ecs_archetype_t *archetype,
+                          const ecs_signature_t *sig, ecs_system_fn run) {
   if (archetype == NULL) {
     return;
   }
@@ -961,7 +1002,7 @@ static void ecs_step_help(ecs_archetype_t *archetype, const ecs_signature_t *sig
   }
 
   for (uint32_t i = 0; i < archetype->count; i++) {
-    run((ecs_view_t){archetype->components, columns, i});
+    run((ecs_view_t){archetype->components, columns}, i);
   }
 
   ECS_EDGE_LIST_EACH(archetype->right_edges, edge,
@@ -973,7 +1014,7 @@ void ecs_step(ecs_registry_t *registry) {
                       { ecs_step_help(sys->archetype, sys->sig, sys->run); });
 }
 
-void *ecs_view(ecs_view_t view, uint32_t column) {
+void *ecs_view(ecs_view_t view, uint32_t row, uint32_t column) {
   void *component_array = view.component_arrays[view.indices[column]];
-  return ECS_OFFSET(component_array, view.row);
+  return ECS_OFFSET(component_array, row);
 }

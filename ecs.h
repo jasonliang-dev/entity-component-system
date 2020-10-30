@@ -10,6 +10,11 @@ extern "C"
 {
 #endif
 
+  typedef uintptr_t ecs_entity_t;
+
+  // -- MAP --------------------------------------------------------------------
+  // type unsafe hashtable
+
   typedef struct ecs_map_t ecs_map_t;
 
   typedef uint32_t (*ecs_hash_fn)(const void *);
@@ -48,18 +53,14 @@ extern "C"
   void ecs_map_inspect(ecs_map_t *map); // assumes keys and values are ints
 #endif
 
-  typedef uintptr_t ecs_entity_t;
+  // -- TYPE -------------------------------------------------------------------
+  // set of component ids in sorted order
 
-  typedef struct ecs_type_t {
-    uint32_t capacity;
-    uint32_t count;
-    ecs_entity_t *elements;
-  } ecs_type_t;
+  typedef struct ecs_type_t ecs_type_t;
 
   ecs_type_t *ecs_type_new(uint32_t capacity);
   void ecs_type_free(ecs_type_t *type);
   ecs_type_t *ecs_type_copy(const ecs_type_t *from);
-  ecs_entity_t *ecs_type_get_array(ecs_type_t *type);
   uint32_t ecs_type_len(const ecs_type_t *type);
   bool ecs_type_equal(const ecs_type_t *a, const ecs_type_t *b);
   int32_t ecs_type_index_of(const ecs_type_t *type, ecs_entity_t e);
@@ -83,36 +84,27 @@ extern "C"
   void ecs_type_inspect(ecs_type_t *type);
 #endif
 
-  typedef struct ecs_signature_t {
-    uint32_t count;
-    ecs_entity_t components[];
-  } ecs_signature_t;
+  // -- SIGNATURE --------------------------------------------------------------
+  // component ids in a defined order
+
+  typedef struct ecs_signature_t ecs_signature_t;
 
   ecs_signature_t *ecs_signature_new(uint32_t count);
   ecs_signature_t *ecs_signature_new_n(uint32_t count, ...);
   void ecs_signature_free(ecs_signature_t *sig);
   ecs_type_t *ecs_signature_as_type(const ecs_signature_t *sig);
 
-  typedef struct ecs_archetype_t ecs_archetype_t;
+  // -- EDGE LIST --------------------------------------------------------------
+  // archetype edges for graph traversal
 
-  typedef struct ecs_edge_t {
-    ecs_entity_t component;
-    ecs_archetype_t *archetype;
-  } ecs_edge_t;
+  typedef struct ecs_edge_t ecs_edge_t;
+  typedef struct ecs_edge_list_t ecs_edge_list_t;
 
-  typedef struct ecs_edge_list_t {
-    uint32_t capacity;
-    uint32_t count;
-    ecs_edge_t *edges;
-  } ecs_edge_list_t;
-
-  ecs_edge_list_t *ecs_edge_list_new();
+  ecs_edge_list_t *ecs_edge_list_new(void);
   void ecs_edge_list_free(ecs_edge_list_t *edge_list);
   uint32_t ecs_edge_list_len(const ecs_edge_list_t *edge_list);
   void ecs_edge_list_add(ecs_edge_list_t *edge_list, ecs_edge_t edge);
   void ecs_edge_list_remove(ecs_edge_list_t *edge_list, ecs_entity_t component);
-  ecs_edge_t *ecs_edge_list_find(ecs_edge_list_t *edge_list,
-                                 ecs_entity_t component);
 
 #define ECS_EDGE_LIST_EACH(edge_list, var, ...)                                \
   do {                                                                         \
@@ -123,15 +115,11 @@ extern "C"
     }                                                                          \
   } while (0)
 
-  struct ecs_archetype_t {
-    uint32_t capacity;
-    uint32_t count;
-    ecs_type_t *type;
-    ecs_entity_t *entity_ids;
-    void **components;
-    ecs_edge_list_t *left_edges;
-    ecs_edge_list_t *right_edges;
-  };
+  // -- ARCHETYPE --------------------------------------------------------------
+  // graph vertex. archetypes are tables that stores component data for each
+  // entity.
+
+  typedef struct ecs_archetype_t ecs_archetype_t;
 
   ecs_archetype_t *ecs_archetype_new(ecs_type_t *type,
                                      const ecs_map_t *component_index,
@@ -159,44 +147,27 @@ extern "C"
   void ecs_archetype_inspect(ecs_archetype_t *archetype);
 #endif
 
-  typedef struct ecs_record_t {
-    ecs_archetype_t *archetype;
-    uint32_t row;
-  } ecs_record_t;
-
-  typedef void (*ecs_system_fn)();
-
-  typedef struct ecs_system_t {
-    ecs_archetype_t *archetype;
-    const ecs_signature_t *sig;
-    ecs_system_fn run;
-  } ecs_system_t;
+  // -- ENTITY COMPONENT SYSTEM ------------------------------------------------
+  // public api
 
   typedef struct ecs_view_t {
     void **component_arrays;
     uint32_t *indices;
-    uint32_t row;
   } ecs_view_t;
 
-  typedef struct ecs_registry_t {
-    ecs_map_t *entity_index;    // <ecs_entity_t, ecs_record_t>
-    ecs_map_t *component_index; // <ecs_entity_t, size_t>
-    ecs_map_t *system_index;    // <ecs_entity_t, ecs_system_t>
-    ecs_map_t *type_index;      // <ecs_type_t *, ecs_archetype_t *>
-    ecs_map_t *named_entities;  // <char *, ecs_entity_t>
-    ecs_archetype_t *root;
-    ecs_entity_t next_entity_id;
-  } ecs_registry_t;
+  typedef void (*ecs_system_fn)(ecs_view_t, uint32_t);
+
+  typedef struct ecs_registry_t ecs_registry_t;
 
   ecs_registry_t *ecs_init(void);
   void ecs_destroy(ecs_registry_t *registry);
   ecs_entity_t ecs_entity(ecs_registry_t *registry);
   ecs_entity_t ecs_component(ecs_registry_t *registry, const char *name,
                              size_t component_size);
-  ecs_entity_t ecs_system(ecs_registry_t *registry,
-                          const ecs_signature_t *signature,
+  ecs_entity_t ecs_system(ecs_registry_t *registry, ecs_signature_t *signature,
                           ecs_system_fn system);
-  void ecs_name(ecs_registry_t *registry, ecs_entity_t entity, const char *name);
+  void ecs_name(ecs_registry_t *registry, ecs_entity_t entity,
+                const char *name);
   void ecs_attach(ecs_registry_t *registry, ecs_entity_t entity,
                   ecs_entity_t component);
   void ecs_attach_w_name(ecs_registry_t *registry, ecs_entity_t entity,
@@ -204,9 +175,11 @@ extern "C"
   void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
                ecs_entity_t component, const void *data);
   void ecs_step(ecs_registry_t *registry);
-  void *ecs_view(ecs_view_t view, uint32_t column);
+  void *ecs_view(ecs_view_t view, uint32_t row, uint32_t column);
 
 #define ECS_COMPONENT(registry, T) ecs_component(registry, #T, sizeof(T));
+#define ECS_SYSTEM(registry, system, n, ...)                                   \
+  ecs_system(registry, ecs_signature_new_n(n, __VA_ARGS__), system)
 
 #ifdef __cplusplus
 } // extern "C"
