@@ -840,6 +840,21 @@ void ecs_archetype_inspect(ecs_archetype_t *archetype) {
   });
   printf("  ]\n");
 
+  printf("  components: [\n");
+  uint32_t type_len = ecs_type_len(archetype->type);
+  for (uint32_t i = 0; i < type_len; i++) {
+    printf("    %d: [\n", i);
+    for (uint32_t j = 0; j < archetype->capacity; j++) {
+      if (j == archetype->count) {
+        printf("      -- end of load --\n");
+      }
+      printf("      %d: %f\n", j,
+             *(float *)ECS_OFFSET(archetype->components[i], j * sizeof(float)));
+    }
+    printf("    ]\n");
+  }
+  printf("  ]\n");
+
   printf("}\n");
 }
 #endif
@@ -958,37 +973,51 @@ void ecs_set(ecs_registry_t *registry, ecs_entity_t entity,
 }
 
 static void ecs_step_help(ecs_archetype_t *archetype,
+                          const ecs_map_t *component_index,
                           const ecs_signature_t *sig, ecs_system_fn run) {
   if (archetype == NULL) {
     return;
   }
 
-  uint32_t columns[sig->count];
+  uint32_t signature_to_index[sig->count];
+  uint32_t component_sizes[sig->count];
 
   for (uint32_t slow = 0; slow < sig->count; slow++) {
     uint32_t type_len = ecs_type_len(archetype->type);
     for (uint32_t fast = 0; fast < type_len; fast++) {
-      if (archetype->type->elements[fast] == sig->components[slow]) {
-        columns[slow] = fast;
+      ecs_entity_t component = archetype->type->elements[fast];
+      if (component == sig->components[slow]) {
+        size_t *component_size =
+            ecs_map_get(component_index, (void *)component);
+        ECS_ENSURE(component_size != NULL, FAILED_LOOKUP);
+
+        component_sizes[slow] = *component_size;
+        signature_to_index[slow] = fast;
         break;
       }
     }
   }
 
+  ecs_view_t view = {archetype->components, signature_to_index,
+                     component_sizes};
   for (uint32_t i = 0; i < archetype->count; i++) {
-    run((ecs_view_t){archetype->components, columns}, i);
+    run(view, i);
   }
 
-  ECS_EDGE_LIST_EACH(archetype->right_edges, edge,
-                     { ecs_step_help(edge.archetype, sig, run); });
+  ECS_EDGE_LIST_EACH(archetype->right_edges, edge, {
+    ecs_step_help(edge.archetype, component_index, sig, run);
+  });
 }
 
 void ecs_step(ecs_registry_t *registry) {
-  ECS_MAP_VALUES_EACH(registry->system_index, ecs_system_t, sys,
-                      { ecs_step_help(sys->archetype, sys->sig, sys->run); });
+  ECS_MAP_VALUES_EACH(registry->system_index, ecs_system_t, sys, {
+    ecs_step_help(sys->archetype, registry->component_index, sys->sig,
+                  sys->run);
+  });
 }
 
 void *ecs_view(ecs_view_t view, uint32_t row, uint32_t column) {
-  void *component_array = view.component_arrays[view.indices[column]];
-  return ECS_OFFSET(component_array, row);
+  void *component_array =
+      view.component_arrays[view.signature_to_index[column]];
+  return ECS_OFFSET(component_array, view.component_sizes[column] * row);
 }

@@ -387,7 +387,7 @@ void move(ecs_view_t view, unsigned int row) {
   int *p = ecs_view(view, row, 0);
   int *v = ecs_view(view, row, 1);
   *p += *v;
-  printf("p is: %d\n", *p);
+  // printf("p is: %d\n", *p);
 }
 
 TEST ecs_run_system_loop() {
@@ -412,21 +412,14 @@ TEST ecs_run_system_loop() {
   PASS();
 }
 
-typedef struct Position {
-  float x;
-  float y;
-} Position;
-
-typedef struct Velocity {
-  float x;
-  float y;
-} Velocity;
+typedef float Position;
+typedef float Velocity;
 
 void do_ecs_move(ecs_view_t view, unsigned int row) {
   Position *p = (Position *)ecs_view(view, row, 0);
   Velocity *v = (Velocity *)ecs_view(view, row, 1);
-  p->x += v->x;
-  p->y += v->y;
+  *p += *v;
+  printf("%f, %f\n", *p, *v);
 }
 
 TEST ecs_from_bench(int context[]) {
@@ -442,8 +435,8 @@ TEST ecs_from_bench(int context[]) {
     ecs_entity_t e = ecs_entity(registry);
     ecs_attach(registry, e, pos_component);
     ecs_attach(registry, e, vel_component);
-    Position initial_position = {0, 0};
-    Velocity initial_velocity = {1, 1};
+    Position initial_position = 0;
+    Velocity initial_velocity = 1;
     ecs_set(registry, e, pos_component, &initial_position);
     ecs_set(registry, e, vel_component, &initial_velocity);
   }
@@ -459,7 +452,6 @@ TEST ecs_from_bench(int context[]) {
 }
 
 SUITE(ecs) {
-  RUN_TEST1(ecs_from_bench, ((int[2]){1000, 1000}));
   RUN_TEST(ecs_run_system_loop);
   RUN_TEST(ecs_run_system);
   RUN_TEST(ecs_minimal);
@@ -467,6 +459,7 @@ SUITE(ecs) {
   RUN_TEST(ecs_create_entity);
   RUN_TEST(ecs_attach_component);
   RUN_TEST(ecs_set_component_data);
+  RUN_TEST1(ecs_from_bench, ((int[2]){10, 1000}));
 }
 
 GREATEST_MAIN_DEFS();

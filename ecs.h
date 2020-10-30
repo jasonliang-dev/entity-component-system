@@ -150,11 +150,12 @@ extern "C"
 #endif
 
   // -- ENTITY COMPONENT SYSTEM ------------------------------------------------
-  // functions below is the public api
+  // functions below is the intended public api
 
   typedef struct ecs_view_t {
     void **component_arrays;
-    uint32_t *indices;
+    uint32_t *signature_to_index;
+    uint32_t *component_sizes;
   } ecs_view_t;
 
   typedef void (*ecs_system_fn)(ecs_view_t, uint32_t);
