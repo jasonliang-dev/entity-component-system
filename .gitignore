@@ -1,3 +1,4 @@
 *.o
 ecs_test
 vgcore.*
+callgrind.*

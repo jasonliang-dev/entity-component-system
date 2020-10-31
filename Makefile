@@ -11,4 +11,4 @@ all: $(OBJ)
 
 .PHONY: clean
 clean:
-	rm -f *.o ecs_test vgcore.*
+	rm -f *.o ecs_test vgcore.* callgrind.*
