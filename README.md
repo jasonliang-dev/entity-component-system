@@ -11,15 +11,15 @@ Copy `ecs.c` and `ecs.h` to your project.
 #include "ecs.h"
 #include <stdio.h>
 
-struct Position {
+typedef struct {
   float x;
   float y;
-};
+} Position;
 
-struct Velocity {
+typedef struct {
   float x;
   float y;
-};
+} Velocity;
 
 void Move(ecs_view_t view, unsigned int row) {
   Position *p = ecs_view(view, row, 0);
